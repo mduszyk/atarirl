@@ -1,3 +1,4 @@
+import logging
 import random
 from collections import deque
 from dataclasses import dataclass
@@ -38,10 +39,10 @@ def copy_weights(src, dst):
     dst.load_state_dict(src.state_dict())
 
 
-def eps_greedy(action_values, eps):
+def eps_greedy(actions_values, eps):
     if random.random() < eps:
-        return random.randint(0, len(action_values) - 1)
-    return torch.argmax(action_values)
+        return random.randint(0, len(actions_values) - 1)
+    return torch.argmax(actions_values)
 
 
 def sample_batch(buffer, batch_size):
@@ -62,16 +63,16 @@ def sample_batch(buffer, batch_size):
     return s1_batch, a_batch, r_batch, s2_batch
 
 
-def double_dqn(env, q1, q2, params, sgd_step):
-    buffer = deque(maxlen=params.N)
+def dqn(env, q1, q2, params, sgd_step):
+    buffer = deque(maxlen=params.buffer_size)
     step = 0
 
     x, info = env.reset(seed=13)
-    for episode in range(params.M):
-        frames = deque([x], maxlen=params.m)
+    for episode in range(params.num_episodes):
+        frames = deque([x], maxlen=params.frames_per_state)
         s1 = preprocess(frames)
 
-        for t in range(params.T):
+        for t in range(params.max_episode_time):
             # eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
             eps = max(-9e-7 * step + 1., .1)
             a = eps_greedy(q1(s1), eps)
@@ -83,12 +84,12 @@ def double_dqn(env, q1, q2, params, sgd_step):
             buffer.append(transition)
             s1 = s2
 
-            if len(buffer) == params.N:
+            if len(buffer) == params.buffer_size:
                 batch = sample_batch(buffer, params.batch_size)
                 sgd_step(q1, q2, batch)
 
             step += 1
-            if step % params.C == 0:
+            if step % params.target_update_freq == 0:
                 copy_weights(q1, q2)
 
             if terminated or truncated:
@@ -98,7 +99,16 @@ def double_dqn(env, q1, q2, params, sgd_step):
 
 
 def dqn_step(q1, q2, batch, opt, params):
-    pass
+    s1_batch, a_batch, r_batch, s2_batch = batch
+    batch_size = s1_batch.shape[0]
+    with torch.no_grad():
+        a_max = torch.argmax(q2(s2_batch), dim=1)
+        target = r_batch + params.gamma * q2(s2_batch)[torch.arange(batch_size), a_max]
+    opt.zero_grad()
+    output = q1(s1_batch)[torch.arange(batch_size), a_batch]
+    loss = torch.mean((target - output) ** 2)
+    loss.backward()
+    opt.step()
 
 
 def double_dqn_step(q1, q2, batch, opt, params):
@@ -116,28 +126,38 @@ def double_dqn_step(q1, q2, batch, opt, params):
 
 @dataclass
 class Params:
-    M = 10000
-    T = 1000
-    C = 100
-    N = 500
+    # M in the paper
+    num_episodes = 10000
+    # T in the paper
+    max_episode_time = 1000
+    # C in the paper
+    target_update_freq = 100
+    # N in the paper
+    buffer_size = 500
+    # m in the paper
+    frames_per_state = 4
     gamma = .99
     lr = 1e-3
-    m = 4
     batch_size = 32
 
 
 def main():
-    gym.register_envs(ale_py)
-    env = gym.make("ALE/Breakout-v5", render_mode="human")
+    logging.basicConfig(
+        format='%(asctime)s %(module)s %(levelname)s %(message)s',
+        level=logging.INFO, handlers=[logging.StreamHandler()], force=True)
 
-    q1 = qnet(4)
-    q2 = qnet(4)
+    gym.register_envs(ale_py)
+    env = gym.make("ALE/Breakout-v5", render_mode="rgb_array")
+    num_actions = env.action_space.n
+
+    q1 = qnet(num_actions)
+    q2 = qnet(num_actions)
 
     params = Params()
 
     opt = torch.optim.RMSprop(q1.parameters(), lr=params.lr)
     sgd_step = partial(double_dqn_step, opt=opt, params=params)
-    double_dqn(env, q1, q2, params, sgd_step)
+    dqn(env, q1, q2, params, sgd_step)
 
 
 if __name__ == '__main__':
