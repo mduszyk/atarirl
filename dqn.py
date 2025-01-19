@@ -13,14 +13,14 @@ import gymnasium as gym
 import ale_py
 
 
-def preprocess(frames, frames_per_state):
-    if len(frames) < frames_per_state:
-        for i in range(frames_per_state - len(frames) + 1):
-            frames.append(frames[-1])
-
+def preprocess(frames):
     # Max of pixel values for each channel between current and previous frames
-    frames = [torch.maximum(torch.tensor(frames[i - 1]), torch.tensor(frames[i])) for i in range(1, len(frames))]
-    frames = torch.stack(frames)
+    max_frames = []
+    for i in range(1, len(frames)):
+        f0 = torch.tensor(frames[i - 1])
+        f1 = torch.tensor(frames[i])
+        max_frames.append(torch.maximum(f0, f1))
+    frames = torch.stack(max_frames)
 
     # Extract the Y channel, luminance, H x W x 3 -> H x W x 1, Y = 0.299 * R + 0.587 * G + 0.114 * B
     # This reflects how humans perceive brightness.
@@ -64,7 +64,7 @@ def eps_greedy(actions_values, eps):
     return torch.argmax(actions_values)
 
 
-def sample_batch(buffer, batch_size):
+def sample_batch(buffer, batch_size, device):
     s1_batch = []
     a_batch = []
     r_batch = []
@@ -75,37 +75,42 @@ def sample_batch(buffer, batch_size):
         a_batch.append(a)
         r_batch.append(r)
         s2_batch.append(s2)
-    s1_batch = torch.concat(s1_batch, dim=0)
-    a_batch = torch.tensor(a_batch)
-    r_batch = torch.tensor(r_batch)
-    s2_batch = torch.concat(s2_batch, dim=0)
+    s1_batch = torch.concat(s1_batch, dim=0).to(device)
+    a_batch = torch.tensor(a_batch, device=device)
+    r_batch = torch.tensor(r_batch, device=device)
+    s2_batch = torch.concat(s2_batch, dim=0).to(device)
     return s1_batch, a_batch, r_batch, s2_batch
 
 
-def dqn(env, q1, q2, params, sgd_step):
+def dqn(env, q1, q2, params, sgd_step, device):
     buffer = deque(maxlen=params.buffer_size)
     step = 0
 
     x, info = env.reset(seed=13)
     for episode in range(params.num_episodes):
-        frames = deque([x], maxlen=params.frames_per_state + 1)
-        s1 = preprocess(frames, params.frames_per_state)
+        frames = deque([x] * (params.frames_per_state + 1), maxlen=params.frames_per_state + 1)
+        s1 = preprocess(frames)
 
         for t in range(params.max_episode_time):
             # eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
             eps = max(-9e-7 * step + 1., .1)
-            a = eps_greedy(q1(s1), eps)
+            a = eps_greedy(q1(s1.to(device)), eps)
 
             x, r, terminated, truncated, info = env.step(a)
             frames.append(x)
-            s2 = preprocess(frames, params.frames_per_state)
+            s2 = preprocess(frames)
             transition = (s1, a, r, s2)
             buffer.append(transition)
             s1 = s2
 
             if len(buffer) == params.buffer_size:
-                batch = sample_batch(buffer, params.batch_size)
-                sgd_step(q1, q2, batch)
+                batch = sample_batch(buffer, params.batch_size, device)
+                l = sgd_step(q1, q2, batch)
+                if step % params.log_freq == 0:
+                    logging.info('Episode: %d, t: %d, step: %d, loss: %e', episode, t, step, l)
+            else:
+                if step % params.log_freq == 0:
+                    logging.info('Episode: %d, t: %d, step: %d, buffer: %d', episode, t, step, len(buffer))
 
             step += 1
             if step % params.target_update_freq == 0:
@@ -129,6 +134,7 @@ def dqn_step(q1, q2, batch, opt, params):
     loss = torch.mean((target - output) ** 2)
     loss.backward()
     opt.step()
+    return loss.item()
 
 
 def double_dqn_step(q1, q2, batch, opt, params):
@@ -142,24 +148,25 @@ def double_dqn_step(q1, q2, batch, opt, params):
     loss = torch.mean((target - output) ** 2)
     loss.backward()
     opt.step()
-    logging.info('Loss: %f', loss)
+    return loss.item()
 
 
 @dataclass
 class Params:
     # M in the paper
-    num_episodes = 2
+    num_episodes = 1000
     # T in the paper
-    max_episode_time = 100
+    max_episode_time = 100_000
     # C in the paper
-    target_update_freq = 10
+    target_update_freq = 10_000
     # N in the paper
-    buffer_size = 5
+    buffer_size = 100_000
     # m in the paper
     frames_per_state = 4
     gamma = .99
-    lr = 1e-3
+    lr = .00025
     batch_size = 32
+    log_freq = 500
 
 
 def main():
@@ -171,14 +178,17 @@ def main():
     env = gym.make("ALE/Breakout-v5", render_mode="rgb_array")
     num_actions = env.action_space.n
 
-    q1 = qnet(num_actions)
-    q2 = qnet(num_actions)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    logging.info('Device: %s', device)
+
+    q1 = qnet(num_actions).to(device)
+    q2 = qnet(num_actions).to(device)
 
     params = Params()
 
     opt = torch.optim.RMSprop(q1.parameters(), lr=params.lr)
     sgd_step = partial(double_dqn_step, opt=opt, params=params)
-    dqn(env, q1, q2, params, sgd_step)
+    dqn(env, q1, q2, params, sgd_step, device)
 
 
 if __name__ == '__main__':
