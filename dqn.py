@@ -6,6 +6,7 @@ from functools import partial
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 import gymnasium as gym
@@ -13,8 +14,20 @@ import ale_py
 
 
 def preprocess(frames):
-    # TODO
-    return frames[-1]
+    # Max of pixel values for each channel between current and previous frames
+    frames = [torch.maximum(torch.tensor(frames[i - 1]), torch.tensor(frames[i])) for i in range(1, len(frames))]
+    frames = torch.stack(frames)
+
+    # Extract the Y channel, luminance, H x W x 3 -> H x W x 1, Y = 0.299 * R + 0.587 * G + 0.114 * B
+    # This reflects how humans perceive brightness.
+    weights = torch.tensor([0.299, 0.587, 0.114]).view(1, 1, 1, 3)
+    frames = torch.sum(frames * weights, dim=-1, keepdim=True).permute(0, 3, 1, 2)
+
+    # Resize to 84 x 84
+    frames = F.interpolate(frames, size=(84, 84), mode='bilinear').squeeze(1)
+
+    # Scale values to [0, 1]
+    return frames / 255.
 
 
 def qnet(num_actions):
@@ -69,7 +82,7 @@ def dqn(env, q1, q2, params, sgd_step):
 
     x, info = env.reset(seed=13)
     for episode in range(params.num_episodes):
-        frames = deque([x], maxlen=params.frames_per_state)
+        frames = deque([x], maxlen=params.frames_per_state + 1)
         s1 = preprocess(frames)
 
         for t in range(params.max_episode_time):
@@ -102,8 +115,9 @@ def dqn_step(q1, q2, batch, opt, params):
     s1_batch, a_batch, r_batch, s2_batch = batch
     batch_size = s1_batch.shape[0]
     with torch.no_grad():
-        a_max = torch.argmax(q2(s2_batch), dim=1)
-        target = r_batch + params.gamma * q2(s2_batch)[torch.arange(batch_size), a_max]
+        actions_values = q2(s2_batch)
+        a_max = torch.argmax(actions_values, dim=1)
+        target = r_batch + params.gamma * actions_values[torch.arange(batch_size), a_max]
     opt.zero_grad()
     output = q1(s1_batch)[torch.arange(batch_size), a_batch]
     loss = torch.mean((target - output) ** 2)
