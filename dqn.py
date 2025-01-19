@@ -1,7 +1,9 @@
 import random
-from dataclasses import dataclass
 from collections import deque
+from dataclasses import dataclass
+from functools import partial
 
+import numpy as np
 import torch
 from torch import nn
 
@@ -42,11 +44,25 @@ def eps_greedy(action_values, eps):
     return torch.argmax(action_values)
 
 
-def sample_batch(reply_buffer, batch_size):
-    pass
+def sample_batch(buffer, batch_size):
+    s1_batch = []
+    a_batch = []
+    r_batch = []
+    s2_batch = []
+    for i in np.random.randint(0, len(buffer), (batch_size,)):
+        s1, a, r, s2 = buffer[i]
+        s1_batch.append(s1)
+        a_batch.append(a)
+        r_batch.append(r)
+        s2_batch.append(s2)
+    s1_batch = torch.stack(s1_batch, dim=0)
+    a_batch = torch.tensor(a_batch)
+    r_batch = torch.tensor(r_batch)
+    s2_batch = torch.stack(s2_batch, dim=0)
+    return s1_batch, a_batch, r_batch, s2_batch
 
 
-def double_dqn(env, q1, q2, opt, params):
+def double_dqn(env, q1, q2, params, sgd_step):
     buffer = deque(maxlen=params.N)
     step = 0
 
@@ -69,7 +85,7 @@ def double_dqn(env, q1, q2, opt, params):
 
             if len(buffer) == params.N:
                 batch = sample_batch(buffer, params.batch_size)
-                sgd_step(q1, q2, batch, opt, params)
+                sgd_step(q1, q2, batch)
 
             step += 1
             if step % params.C == 0:
@@ -81,7 +97,11 @@ def double_dqn(env, q1, q2, opt, params):
         x, info = env.reset()
 
 
-def sgd_step(q1, q2, batch, opt, params):
+def dqn_step(q1, q2, batch, opt, params):
+    pass
+
+
+def double_dqn_step(q1, q2, batch, opt, params):
     s1_batch, a_batch, r_batch, s2_batch = batch
     batch_size = s1_batch.shape[0]
     with torch.no_grad():
@@ -116,7 +136,8 @@ def main():
     params = Params()
 
     opt = torch.optim.RMSprop(q1.parameters(), lr=params.lr)
-    double_dqn(env, q1, q2, opt, params)
+    sgd_step = partial(double_dqn_step, opt=opt, params=params)
+    double_dqn(env, q1, q2, params, sgd_step)
 
 
 if __name__ == '__main__':
