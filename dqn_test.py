@@ -30,8 +30,8 @@ def test_copy_weights():
 def test_sample_batch():
     buf = deque()
     for _ in range(15):
-        s1 = torch.rand((4, 84, 84))
-        s2 = torch.rand((4, 84, 84))
+        s1 = torch.rand((1, 4, 84, 84))
+        s2 = torch.rand((1, 4, 84, 84))
         a = torch.randint(0, 4, (1,)).item()
         r = torch.rand((1,)).item()
         t = (s1, a, r, s2)
