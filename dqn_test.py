@@ -45,5 +45,5 @@ def test_sample_batch():
 
 def test_preprocess():
     frames = [(np.random.rand(210, 160, 3) * 255).astype(np.uint8) for _ in range(5)]
-    s = preprocess(frames)
-    assert s.shape == (4, 84, 84)
+    s = preprocess(frames, 4)
+    assert s.shape == (1, 4, 84, 84)

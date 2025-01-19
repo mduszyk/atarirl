@@ -13,7 +13,11 @@ import gymnasium as gym
 import ale_py
 
 
-def preprocess(frames):
+def preprocess(frames, frames_per_state):
+    if len(frames) < frames_per_state:
+        for i in range(frames_per_state - len(frames) + 1):
+            frames.append(frames[-1])
+
     # Max of pixel values for each channel between current and previous frames
     frames = [torch.maximum(torch.tensor(frames[i - 1]), torch.tensor(frames[i])) for i in range(1, len(frames))]
     frames = torch.stack(frames)
@@ -24,7 +28,9 @@ def preprocess(frames):
     frames = torch.sum(frames * weights, dim=-1, keepdim=True).permute(0, 3, 1, 2)
 
     # Resize to 84 x 84
-    frames = F.interpolate(frames, size=(84, 84), mode='bilinear').squeeze(1)
+    frames = F.interpolate(frames, size=(84, 84), mode='bilinear')
+    # remove previous channel dim and add batch dim
+    frames = frames.squeeze(1).unsqueeze(0)
 
     # Scale values to [0, 1]
     return frames / 255.
@@ -69,10 +75,10 @@ def sample_batch(buffer, batch_size):
         a_batch.append(a)
         r_batch.append(r)
         s2_batch.append(s2)
-    s1_batch = torch.stack(s1_batch, dim=0)
+    s1_batch = torch.concat(s1_batch, dim=0)
     a_batch = torch.tensor(a_batch)
     r_batch = torch.tensor(r_batch)
-    s2_batch = torch.stack(s2_batch, dim=0)
+    s2_batch = torch.concat(s2_batch, dim=0)
     return s1_batch, a_batch, r_batch, s2_batch
 
 
@@ -83,7 +89,7 @@ def dqn(env, q1, q2, params, sgd_step):
     x, info = env.reset(seed=13)
     for episode in range(params.num_episodes):
         frames = deque([x], maxlen=params.frames_per_state + 1)
-        s1 = preprocess(frames)
+        s1 = preprocess(frames, params.frames_per_state)
 
         for t in range(params.max_episode_time):
             # eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
@@ -92,7 +98,7 @@ def dqn(env, q1, q2, params, sgd_step):
 
             x, r, terminated, truncated, info = env.step(a)
             frames.append(x)
-            s2 = preprocess(frames)
+            s2 = preprocess(frames, params.frames_per_state)
             transition = (s1, a, r, s2)
             buffer.append(transition)
             s1 = s2
@@ -136,18 +142,19 @@ def double_dqn_step(q1, q2, batch, opt, params):
     loss = torch.mean((target - output) ** 2)
     loss.backward()
     opt.step()
+    logging.info('Loss: %f', loss)
 
 
 @dataclass
 class Params:
     # M in the paper
-    num_episodes = 10000
+    num_episodes = 2
     # T in the paper
-    max_episode_time = 1000
+    max_episode_time = 100
     # C in the paper
-    target_update_freq = 100
+    target_update_freq = 10
     # N in the paper
-    buffer_size = 500
+    buffer_size = 5
     # m in the paper
     frames_per_state = 4
     gamma = .99
