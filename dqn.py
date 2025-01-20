@@ -121,39 +121,37 @@ def dqn(env, q0, q1, params, sgd_step, device):
         x, info = env.reset()
 
 
-def dqn_step(q0, q1, batch, episode_end, opt, params):
+def dqn_sgd_step(q0, q1, batch, episode_end, opt, params, target_fn):
     s0_batch, a_batch, r_batch, s1_batch = batch
-    batch_size = s0_batch.shape[0]
-    if episode_end:
-        target = r_batch
-    else:
-        with torch.no_grad():
-            actions_values = q1(s1_batch)
-            a_max = torch.argmax(actions_values, dim=1)
-            target = r_batch + params.gamma * actions_values[torch.arange(batch_size), a_max]
+    m = s0_batch.shape[0]
+    target = target_fn(q0, q1, batch, episode_end, params)
     opt.zero_grad()
-    output = q0(s0_batch)[torch.arange(batch_size), a_batch]
+    output = q0(s0_batch)[torch.arange(m), a_batch]
     loss = torch.mean((target - output) ** 2)
     loss.backward()
     opt.step()
     return loss.item()
 
 
-def double_dqn_step(q0, q1, batch, episode_end, opt, params):
+def dqn_target(q0, q1, batch, episode_end, params):
     s0_batch, a_batch, r_batch, s1_batch = batch
-    batch_size = s0_batch.shape[0]
     if episode_end:
-        target = r_batch
-    else:
-        with torch.no_grad():
-            a_max = torch.argmax(q0(s1_batch), dim=1)
-            target = r_batch + params.gamma * q1(s1_batch)[torch.arange(batch_size), a_max]
-    opt.zero_grad()
-    output = q0(s0_batch)[torch.arange(batch_size), a_batch]
-    loss = torch.mean((target - output) ** 2)
-    loss.backward()
-    opt.step()
-    return loss.item()
+        return r_batch
+    m = s0_batch.shape[0]
+    with torch.no_grad():
+        actions_values = q1(s1_batch)
+        a_max = torch.argmax(actions_values, dim=1)
+        return r_batch + params.gamma * actions_values[torch.arange(m), a_max]
+
+
+def double_dqn_target(q0, q1, batch, episode_end, params):
+    s0_batch, a_batch, r_batch, s1_batch = batch
+    if episode_end:
+        return r_batch
+    m = s0_batch.shape[0]
+    with torch.no_grad():
+        a_max = torch.argmax(q0(s1_batch), dim=1)
+        return r_batch + params.gamma * q1(s1_batch)[torch.arange(m), a_max]
 
 
 @dataclass
@@ -193,7 +191,7 @@ def main():
     params = Params()
 
     opt = torch.optim.RMSprop(q0.parameters(), lr=params.lr)
-    sgd_step = partial(double_dqn_step, opt=opt, params=params)
+    sgd_step = partial(dqn_sgd_step, opt=opt, params=params, target_fn=double_dqn_target)
     dqn(env, q0, q1, params, sgd_step, device)
 
 
