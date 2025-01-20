@@ -15,16 +15,12 @@ import ale_py
 
 def preprocess(frames):
     # Max of pixel values for each channel between current and previous frames
-    max_frames = []
-    for i in range(1, len(frames)):
-        f0 = torch.tensor(frames[i - 1])
-        f1 = torch.tensor(frames[i])
-        max_frames.append(torch.maximum(f0, f1))
-    frames = torch.stack(max_frames)
+    frames = [torch.maximum(frames[i - 1], frames[i]) for i in range(1, len(frames))]
+    frames = torch.stack(frames)
 
     # Extract the Y channel, luminance, H x W x 3 -> H x W x 1, Y = 0.299 * R + 0.587 * G + 0.114 * B
     # This reflects how humans perceive brightness.
-    weights = torch.tensor([0.299, 0.587, 0.114]).view(1, 1, 1, 3)
+    weights = torch.tensor([0.299, 0.587, 0.114], device=frames[0].device).view(1, 1, 1, 3)
     frames = torch.sum(frames * weights, dim=-1, keepdim=True).permute(0, 3, 1, 2)
 
     # Resize to 84 x 84
@@ -65,86 +61,95 @@ def eps_greedy(actions_values, eps):
 
 
 def sample_batch(buffer, batch_size, device):
-    s1_batch = []
+    s0_batch = []
     a_batch = []
     r_batch = []
-    s2_batch = []
+    s1_batch = []
     for i in np.random.randint(0, len(buffer), (batch_size,)):
-        s1, a, r, s2 = buffer[i]
-        s1_batch.append(s1)
+        s0, a, r, s1 = buffer[i]
+        s0_batch.append(s0)
         a_batch.append(a)
         r_batch.append(r)
-        s2_batch.append(s2)
-    s1_batch = torch.concat(s1_batch, dim=0).to(device)
+        s1_batch.append(s1)
+    s0_batch = torch.concat(s0_batch, dim=0).to(device)
     a_batch = torch.tensor(a_batch, device=device)
     r_batch = torch.tensor(r_batch, device=device)
-    s2_batch = torch.concat(s2_batch, dim=0).to(device)
-    return s1_batch, a_batch, r_batch, s2_batch
+    s1_batch = torch.concat(s1_batch, dim=0).to(device)
+    return s0_batch, a_batch, r_batch, s1_batch
 
 
-def dqn(env, q1, q2, params, sgd_step, device):
+def dqn(env, q0, q1, params, sgd_step, device):
     buffer = deque(maxlen=params.buffer_size)
     step = 0
 
     x, info = env.reset(seed=13)
     for episode in range(params.num_episodes):
-        frames = deque([x] * (params.frames_per_state + 1), maxlen=params.frames_per_state + 1)
-        s1 = preprocess(frames)
+        frames = [torch.tensor(x, device=device)] * (params.frames_per_state + 1)
+        frames = deque(frames, maxlen=len(frames))
+        s0 = preprocess(frames)
 
         for t in range(params.max_episode_time):
             # eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
             eps = max(-9e-7 * step + 1., .1)
-            a = eps_greedy(q1(s1.to(device)), eps)
+            a = eps_greedy(q0(s0.to(device)), eps)
 
             x, r, terminated, truncated, info = env.step(a)
-            frames.append(x)
-            s2 = preprocess(frames)
-            transition = (s1, a, r, s2)
-            buffer.append(transition)
-            s1 = s2
+            episode_end = terminated or truncated
 
-            if len(buffer) == params.buffer_size:
-                batch = sample_batch(buffer, params.batch_size, device)
-                l = sgd_step(q1, q2, batch)
-                if step % params.log_freq == 0:
-                    logging.info('Episode: %d, t: %d, step: %d, loss: %e', episode, t, step, l)
-            else:
+            frames.append(torch.tensor(x, device=device))
+            s1 = preprocess(frames)
+            transition = (s0.cpu(), a, r, s1.cpu())
+            buffer.append(transition)
+            s0 = s1
+
+            if len(buffer) < params.buffer_start_size:
                 if step % params.log_freq == 0:
                     logging.info('Episode: %d, t: %d, step: %d, buffer: %d', episode, t, step, len(buffer))
+            else:
+                batch = sample_batch(buffer, params.batch_size, device)
+                l = sgd_step(q0, q1, batch, episode_end)
+                if step % params.log_freq == 0:
+                    logging.info('Episode: %d, t: %d, step: %d, loss: %e', episode, t, step, l)
 
             step += 1
             if step % params.target_update_freq == 0:
-                copy_weights(q1, q2)
+                copy_weights(q0, q1)
 
-            if terminated or truncated:
+            if episode_end:
                 break
 
         x, info = env.reset()
 
 
-def dqn_step(q1, q2, batch, opt, params):
-    s1_batch, a_batch, r_batch, s2_batch = batch
-    batch_size = s1_batch.shape[0]
-    with torch.no_grad():
-        actions_values = q2(s2_batch)
-        a_max = torch.argmax(actions_values, dim=1)
-        target = r_batch + params.gamma * actions_values[torch.arange(batch_size), a_max]
+def dqn_step(q0, q1, batch, episode_end, opt, params):
+    s0_batch, a_batch, r_batch, s1_batch = batch
+    batch_size = s0_batch.shape[0]
+    if episode_end:
+        target = r_batch
+    else:
+        with torch.no_grad():
+            actions_values = q1(s1_batch)
+            a_max = torch.argmax(actions_values, dim=1)
+            target = r_batch + params.gamma * actions_values[torch.arange(batch_size), a_max]
     opt.zero_grad()
-    output = q1(s1_batch)[torch.arange(batch_size), a_batch]
+    output = q0(s0_batch)[torch.arange(batch_size), a_batch]
     loss = torch.mean((target - output) ** 2)
     loss.backward()
     opt.step()
     return loss.item()
 
 
-def double_dqn_step(q1, q2, batch, opt, params):
-    s1_batch, a_batch, r_batch, s2_batch = batch
-    batch_size = s1_batch.shape[0]
-    with torch.no_grad():
-        a_max = torch.argmax(q1(s2_batch), dim=1)
-        target = r_batch + params.gamma * q2(s2_batch)[torch.arange(batch_size), a_max]
+def double_dqn_step(q0, q1, batch, episode_end, opt, params):
+    s0_batch, a_batch, r_batch, s1_batch = batch
+    batch_size = s0_batch.shape[0]
+    if episode_end:
+        target = r_batch
+    else:
+        with torch.no_grad():
+            a_max = torch.argmax(q0(s1_batch), dim=1)
+            target = r_batch + params.gamma * q1(s1_batch)[torch.arange(batch_size), a_max]
     opt.zero_grad()
-    output = q1(s1_batch)[torch.arange(batch_size), a_batch]
+    output = q0(s0_batch)[torch.arange(batch_size), a_batch]
     loss = torch.mean((target - output) ** 2)
     loss.backward()
     opt.step()
@@ -160,7 +165,8 @@ class Params:
     # C in the paper
     target_update_freq = 10_000
     # N in the paper
-    buffer_size = 100_000
+    buffer_size = 1000_000
+    buffer_start_size = 50_000
     # m in the paper
     frames_per_state = 4
     gamma = .99
@@ -181,14 +187,14 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     logging.info('Device: %s', device)
 
+    q0 = qnet(num_actions).to(device)
     q1 = qnet(num_actions).to(device)
-    q2 = qnet(num_actions).to(device)
 
     params = Params()
 
-    opt = torch.optim.RMSprop(q1.parameters(), lr=params.lr)
+    opt = torch.optim.RMSprop(q0.parameters(), lr=params.lr)
     sgd_step = partial(double_dqn_step, opt=opt, params=params)
-    dqn(env, q1, q2, params, sgd_step, device)
+    dqn(env, q0, q1, params, sgd_step, device)
 
 
 if __name__ == '__main__':

@@ -36,14 +36,15 @@ def test_sample_batch():
         r = torch.rand((1,)).item()
         t = (s1, a, r, s2)
         buf.append(t)
-    s1_batch, a_batch, r_batch, s2_batch = sample_batch(buf, 5)
-    assert s1_batch.shape == (5, 4, 84, 84)
+    s0_batch, a_batch, r_batch, s1_batch = sample_batch(buf, 5, 'cpu')
+    assert s0_batch.shape == (5, 4, 84, 84)
     assert a_batch.shape == (5,)
     assert r_batch.shape == (5,)
-    assert s2_batch.shape == (5, 4, 84, 84)
+    assert s1_batch.shape == (5, 4, 84, 84)
 
 
 def test_preprocess():
     frames = [(np.random.rand(210, 160, 3) * 255).astype(np.uint8) for _ in range(5)]
-    s = preprocess(frames, 4)
+    frames = list(map(torch.tensor, frames))
+    s = preprocess(frames)
     assert s.shape == (1, 4, 84, 84)
