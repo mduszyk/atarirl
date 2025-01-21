@@ -59,10 +59,16 @@ def copy_weights(src, dst):
     dst.load_state_dict(src.state_dict())
 
 
-def eps_greedy(actions_values, eps):
+def eps_greedy(eps, q0, s0, num_actions, device):
     if random.random() < eps:
-        return random.randint(0, len(actions_values) - 1)
+        return random.randint(0, num_actions - 1)
+    actions_values = q0(s0.to(device))
     return torch.argmax(actions_values)
+
+
+# eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
+def next_epsilon(step):
+    return max(-9e-7 * step + 1., .1)
 
 
 def sample_batch(buffer, batch_size, device):
@@ -84,20 +90,31 @@ def sample_batch(buffer, batch_size, device):
 
 
 def dqn(env, q0, q1, params, sgd_step, device):
+    num_actions = env.action_space.n
     step = 0
     replay_buffer = deque(maxlen=params.buffer_size)
     x, info = env.reset(seed=13)
     for episode in range(1, params.num_episodes + 1):
-        frames = [torch.tensor(x, device=device)] * (params.frames_per_state + 1)
+        frames = [torch.tensor(x, device=device)]
+        episode_end = False
+        for _ in range(params.frames_per_state):
+            a = env.action_space.sample()
+            x, r, terminated, truncated, info = env.step(a)
+            episode_end = terminated or truncated
+            if episode_end: break
+            frames.append(torch.tensor(x, device=device))
+        if episode_end: continue
         s0 = preprocess(frames)
-        frame_buffer = deque(frames[-1:], maxlen=2)
+        frame_buffer = deque([frames[-1]], maxlen=2)
 
         for t in range(params.max_episode_time):
             t0 = time.time()
-            # eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
-            eps = max(-9e-7 * step + 1., .1)
+            eps = 1
+            if len(replay_buffer) >= params.buffer_start_size:
+                eps = next_epsilon(step - params.buffer_start_size)
             mlflow.log_metric('eps', eps, step=step)
-            a = eps_greedy(q0(s0.to(device)), eps)
+            with torch.no_grad():
+                a = eps_greedy(eps, q0, s0, num_actions, device)
 
             x, r, terminated, truncated, info = env.step(a)
             episode_end = terminated or truncated
@@ -129,8 +146,7 @@ def dqn(env, q0, q1, params, sgd_step, device):
             t2 = time.time()
             mlflow.log_metric('sgd_over_envstep_time', (t2 - t1) / (t1 - t0), step=step)
 
-            if episode_end:
-                break
+            if episode_end: break
 
         x, info = env.reset()
 
@@ -174,14 +190,16 @@ def double_dqn_target(q0, q1, batch, episode_end, params):
 @dataclass(frozen=True)
 class Params:
     # M in the paper
-    num_episodes = 1000
+    num_episodes = 100_000
     # T in the paper
     max_episode_time = 100_000
     # C in the paper
     target_update_freq = 10_000
     # N in the paper
-    buffer_size = 1_000_000
-    buffer_start_size = 50_000
+    # buffer_size = 1_000_000
+    buffer_size = 60_000
+    # buffer_start_size = 50_000
+    buffer_start_size = 30_000
     # m in the paper
     frames_per_state = 4
     gamma = .99
@@ -189,7 +207,7 @@ class Params:
     batch_size = 32
     log_freq = 500
     env_id = "ALE/Breakout-v5"
-    model_log_freq = 100
+    model_log_freq = 500
 
 
 def main():
