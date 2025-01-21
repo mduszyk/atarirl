@@ -122,6 +122,7 @@ def dqn(env, q0, q1, params, sgd_step, device):
             t1 = time.time()
             frame_buffer.append(torch.tensor(x, device=device))
             s1 = torch.concat((s0[:, 1:, :, :], preprocess(frame_buffer)), dim=1)
+            r = np.clip(r, -1, 1)
             transition = (s0.cpu(), a, r, s1.cpu())
             replay_buffer.append(transition)
             s0 = s1
