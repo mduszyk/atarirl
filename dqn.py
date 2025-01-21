@@ -1,7 +1,7 @@
 import logging
 import random
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from functools import partial
 
 import numpy as np
@@ -12,8 +12,12 @@ from torch import nn
 import gymnasium as gym
 import ale_py
 
+import mlflow
+
 
 def preprocess(frames):
+    # frame shape: 210 x 160 x 3
+
     # Max of pixel values for each channel between current and previous frames
     frames = [torch.maximum(frames[i - 1], frames[i]) for i in range(1, len(frames))]
     frames = torch.stack(frames)
@@ -83,7 +87,7 @@ def dqn(env, q0, q1, params, sgd_step, device):
     step = 0
 
     x, info = env.reset(seed=13)
-    for episode in range(params.num_episodes):
+    for episode in range(1, params.num_episodes + 1):
         frames = [torch.tensor(x, device=device)] * (params.frames_per_state + 1)
         frames = deque(frames, maxlen=len(frames))
         s0 = preprocess(frames)
@@ -91,6 +95,7 @@ def dqn(env, q0, q1, params, sgd_step, device):
         for t in range(params.max_episode_time):
             # eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
             eps = max(-9e-7 * step + 1., .1)
+            mlflow.log_metric('eps', eps, step=step)
             a = eps_greedy(q0(s0.to(device)), eps)
 
             x, r, terminated, truncated, info = env.step(a)
@@ -102,14 +107,18 @@ def dqn(env, q0, q1, params, sgd_step, device):
             buffer.append(transition)
             s0 = s1
 
+            mlflow.log_metric('buffer', len(buffer), step=step)
             if len(buffer) < params.buffer_start_size:
                 if step % params.log_freq == 0:
-                    logging.info('Episode: %d, t: %d, step: %d, buffer: %d', episode, t, step, len(buffer))
+                    logging.info('Episode: %d, t: %d, step: %d, eps: %f, buffer: %d',
+                                 episode, t, step, eps, len(buffer))
             else:
                 batch = sample_batch(buffer, params.batch_size, device)
                 l = sgd_step(q0, q1, batch, episode_end)
+                mlflow.log_metric("loss", l, step=step)
                 if step % params.log_freq == 0:
-                    logging.info('Episode: %d, t: %d, step: %d, loss: %e', episode, t, step, l)
+                    logging.info('Episode: %d, t: %d, step: %d, eps: %f, loss: %e',
+                                 episode, t, step, eps, l)
 
             step += 1
             if step % params.target_update_freq == 0:
@@ -119,6 +128,9 @@ def dqn(env, q0, q1, params, sgd_step, device):
                 break
 
         x, info = env.reset()
+
+        if episode % params.model_log_freq == 0:
+            mlflow.pytorch.log_model(q0, f'q0_episode{episode}')
 
 
 def dqn_sgd_step(q0, q1, batch, episode_end, opt, params, target_fn):
@@ -154,7 +166,7 @@ def double_dqn_target(q0, q1, batch, episode_end, params):
         return r_batch + params.gamma * q1(s1_batch)[torch.arange(m), a_max]
 
 
-@dataclass
+@dataclass(frozen=True)
 class Params:
     # M in the paper
     num_episodes = 1000
@@ -171,15 +183,21 @@ class Params:
     lr = .00025
     batch_size = 32
     log_freq = 500
+    env_id = "ALE/Breakout-v5"
+    model_log_freq = 5
 
 
 def main():
+    mlflow.set_experiment('dqn')
+    
     logging.basicConfig(
         format='%(asctime)s %(module)s %(levelname)s %(message)s',
         level=logging.INFO, handlers=[logging.StreamHandler()], force=True)
 
+    params = Params()
+
     gym.register_envs(ale_py)
-    env = gym.make("ALE/Breakout-v5", render_mode="rgb_array")
+    env = gym.make(params.env_id, render_mode="rgb_array")
     num_actions = env.action_space.n
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -188,12 +206,16 @@ def main():
     q0 = qnet(num_actions).to(device)
     q1 = qnet(num_actions).to(device)
 
-    params = Params()
-
     opt = torch.optim.RMSprop(q0.parameters(), lr=params.lr)
     sgd_step = partial(dqn_sgd_step, opt=opt, params=params, target_fn=double_dqn_target)
-    dqn(env, q0, q1, params, sgd_step, device)
 
+    with mlflow.start_run(run_name=params.env_id):
+        # TODO why asdict(params) does not work ?
+        params_dict = dict(filter(lambda x: not x[0].startswith('__'), Params.__dict__.items()))
+        mlflow.log_params(params_dict)
+        dqn(env, q0, q1, params, sgd_step, device)
+
+    mlflow.pytorch.log_model(q0, "q0")
 
 if __name__ == '__main__':
     main()
