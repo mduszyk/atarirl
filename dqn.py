@@ -1,5 +1,6 @@
 import logging
 import random
+import time
 from collections import deque
 from dataclasses import dataclass, asdict
 from functools import partial
@@ -92,6 +93,7 @@ def dqn(env, q0, q1, params, sgd_step, device):
         frame_buffer = deque(frames[-1:], maxlen=2)
 
         for t in range(params.max_episode_time):
+            t0 = time.time()
             # eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
             eps = max(-9e-7 * step + 1., .1)
             mlflow.log_metric('eps', eps, step=step)
@@ -100,6 +102,7 @@ def dqn(env, q0, q1, params, sgd_step, device):
             x, r, terminated, truncated, info = env.step(a)
             episode_end = terminated or truncated
 
+            t1 = time.time()
             frame_buffer.append(torch.tensor(x, device=device))
             s1 = torch.concat((s0[:, 1:, :, :], preprocess(frame_buffer)), dim=1)
             transition = (s0.cpu(), a, r, s1.cpu())
@@ -122,6 +125,9 @@ def dqn(env, q0, q1, params, sgd_step, device):
             step += 1
             if step % params.target_update_freq == 0:
                 copy_weights(q0, q1)
+
+            t2 = time.time()
+            mlflow.log_metric('sgd_over_envstep_time', (t2 - t1) / (t1 - t0), step=step)
 
             if episode_end:
                 break
@@ -183,7 +189,7 @@ class Params:
     batch_size = 32
     log_freq = 500
     env_id = "ALE/Breakout-v5"
-    model_log_freq = 10
+    model_log_freq = 100
 
 
 def main():
