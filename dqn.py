@@ -83,14 +83,13 @@ def sample_batch(buffer, batch_size, device):
 
 
 def dqn(env, q0, q1, params, sgd_step, device):
-    buffer = deque(maxlen=params.buffer_size)
     step = 0
-
+    replay_buffer = deque(maxlen=params.buffer_size)
     x, info = env.reset(seed=13)
     for episode in range(1, params.num_episodes + 1):
         frames = [torch.tensor(x, device=device)] * (params.frames_per_state + 1)
-        frames = deque(frames, maxlen=len(frames))
         s0 = preprocess(frames)
+        frame_buffer = deque(frames[-1:], maxlen=2)
 
         for t in range(params.max_episode_time):
             # eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
@@ -101,19 +100,19 @@ def dqn(env, q0, q1, params, sgd_step, device):
             x, r, terminated, truncated, info = env.step(a)
             episode_end = terminated or truncated
 
-            frames.append(torch.tensor(x, device=device))
-            s1 = preprocess(frames)
+            frame_buffer.append(torch.tensor(x, device=device))
+            s1 = torch.concat((s0[:, 1:, :, :], preprocess(frame_buffer)), dim=1)
             transition = (s0.cpu(), a, r, s1.cpu())
-            buffer.append(transition)
+            replay_buffer.append(transition)
             s0 = s1
 
-            mlflow.log_metric('buffer', len(buffer), step=step)
-            if len(buffer) < params.buffer_start_size:
+            mlflow.log_metric('buffer', len(replay_buffer), step=step)
+            if len(replay_buffer) < params.buffer_start_size:
                 if step % params.log_freq == 0:
                     logging.info('Episode: %d, t: %d, step: %d, eps: %f, buffer: %d',
-                                 episode, t, step, eps, len(buffer))
+                                 episode, t, step, eps, len(replay_buffer))
             else:
-                batch = sample_batch(buffer, params.batch_size, device)
+                batch = sample_batch(replay_buffer, params.batch_size, device)
                 l = sgd_step(q0, q1, batch, episode_end)
                 mlflow.log_metric("loss", l, step=step)
                 if step % params.log_freq == 0:
@@ -130,7 +129,7 @@ def dqn(env, q0, q1, params, sgd_step, device):
         x, info = env.reset()
 
         if episode % params.model_log_freq == 0:
-            mlflow.pytorch.log_model(q0, f'q0_episode{episode}')
+            mlflow.pytorch.log_model(q0, f'q0_episode_{episode}')
 
 
 def dqn_sgd_step(q0, q1, batch, episode_end, opt, params, target_fn):
@@ -184,7 +183,7 @@ class Params:
     batch_size = 32
     log_freq = 500
     env_id = "ALE/Breakout-v5"
-    model_log_freq = 5
+    model_log_freq = 10
 
 
 def main():
