@@ -1,0 +1,16 @@
+name: atarirl
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - numpy=1.26.4=py312heda63a1_0
+  - pytorch=2.5.1=py3.12_cuda12.4_cudnn9.1.0_0
+  - pytorch-cuda=12.4=hc786d27_7
+  - torchvision=0.20.1=py312_cu124
+  - gymnasium=1.0.0=py312h9cebb41_1
+  - matplotlib=3.9.3=py312h7900ff3_0
+  - pytest
+  - pip:
+      - ale-py==0.10.1
+      - mlflow==2.19.0
