@@ -17,6 +17,7 @@ def test_copy_weights():
     q2 = qnet(4)
     q3 = qnet(4)
     copy_weights(q1, q2)
+    assert next(q1.parameters()).data is not next(q2.parameters()).data
     copy_weights(q2, q3)
     for param1, param2 in zip(q1.parameters(), q2.parameters()):
         assert torch.equal(param1, param2)
