@@ -2,7 +2,7 @@ from collections import deque
 
 import torch
 
-from dqn import qnet, copy_weights, sample_batch
+from dqn import qnet, copy_weights, sample_batch, compress
 
 
 def test_qnet():
@@ -29,11 +29,11 @@ def test_copy_weights():
 def test_sample_batch():
     buf = deque()
     for _ in range(15):
-        s1 = torch.rand((1, 4, 84, 84))
-        s2 = torch.rand((1, 4, 84, 84))
+        s = torch.rand((1, 5, 84, 84))
+        s = compress(s)
         a = torch.randint(0, 4, (1,)).item()
         r = torch.rand((1,)).item()
-        t = (s1, a, r, s2)
+        t = (s, a, r)
         buf.append(t)
     s0_batch, a_batch, r_batch, s1_batch = sample_batch(buf, 5, 'cpu')
     assert s0_batch.shape == (5, 4, 84, 84)

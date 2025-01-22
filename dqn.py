@@ -5,6 +5,7 @@ from collections import deque
 from dataclasses import dataclass, asdict
 from functools import partial
 
+import blosc
 import numpy as np
 import torch
 from torch import nn
@@ -52,13 +53,25 @@ def next_epsilon(step):
     return max(-9e-7 * step + 1., .1)
 
 
+def compress(x):
+    return blosc.compress(x.cpu().numpy().tobytes(), typesize=x.itemsize)
+
+
+def decompress(b, shape, device):
+    b = blosc.decompress(b)
+    return torch.tensor(np.frombuffer(b, dtype=np.float32).reshape(shape), device=device)
+
+
 def sample_batch(buffer, batch_size, device):
     s0_batch = []
     a_batch = []
     r_batch = []
     s1_batch = []
     for i in np.random.randint(0, len(buffer), (batch_size,)):
-        s0, a, r, s1 = buffer[i]
+        s, a, r = buffer[i]
+        s = decompress(s, (1, 5, 84, 84), device)
+        s0 = s[:, :-1, :, :]
+        s1 = s[:, 1:, :, :]
         s0_batch.append(s0)
         a_batch.append(a)
         r_batch.append(r)
@@ -106,10 +119,11 @@ def dqn(env, q0, q1, params, sgd_step, device):
 
             t1 = time.time()
             r = np.clip(r, -1, 1)
-            s1 = torch.concat((s0[:, 1:, :, :], x), dim=1)
-            transition = (s0.cpu(), a, r, s1.cpu())
+            s1 = torch.concat((s0, x), dim=1)
+            s = compress(s1)
+            transition = (s, a, r)
             replay_buffer.append(transition)
-            s0 = s1
+            s0 = s1[:, 1:, :, :]
 
             mlflow.log_metric('buffer', len(replay_buffer), step=step)
             if len(replay_buffer) < params.buffer_start_size:
@@ -183,7 +197,7 @@ class Params:
     target_update_freq = 10_000
     # N in the paper
     # buffer_size = 1_000_000
-    buffer_size = 60_000
+    buffer_size = 100_000
     # buffer_start_size = 50_000
     buffer_start_size = 30_000
     # buffer_start_size = 10
