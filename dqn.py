@@ -197,7 +197,7 @@ class Params:
     target_update_freq = 10_000
     # N in the paper
     # buffer_size = 1_000_000
-    buffer_size = 100_000
+    buffer_size = 200_000
     # buffer_start_size = 50_000
     buffer_start_size = 30_000
     # buffer_start_size = 10
