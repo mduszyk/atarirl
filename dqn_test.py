@@ -1,9 +1,8 @@
 from collections import deque
 
-import numpy as np
 import torch
 
-from dqn import qnet, copy_weights, sample_batch, preprocess
+from dqn import qnet, copy_weights, sample_batch
 
 
 def test_qnet():
@@ -41,10 +40,3 @@ def test_sample_batch():
     assert a_batch.shape == (5,)
     assert r_batch.shape == (5,)
     assert s1_batch.shape == (5, 4, 84, 84)
-
-
-def test_preprocess():
-    frames = [(np.random.rand(210, 160, 3) * 255).astype(np.uint8) for _ in range(5)]
-    frames = list(map(torch.tensor, frames))
-    s = preprocess(frames)
-    assert s.shape == (1, 4, 84, 84)

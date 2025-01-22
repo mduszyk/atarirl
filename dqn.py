@@ -7,7 +7,6 @@ from functools import partial
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 import gymnasium as gym
@@ -15,26 +14,7 @@ import ale_py
 
 import mlflow
 
-
-def preprocess(frames):
-    # frame shape: 210 x 160 x 3
-
-    # Max of pixel values for each channel between current and previous frames
-    frames = [torch.maximum(frames[i - 1], frames[i]) for i in range(1, len(frames))]
-    frames = torch.stack(frames)
-
-    # Extract the Y channel, luminance, H x W x 3 -> H x W x 1, Y = 0.299 * R + 0.587 * G + 0.114 * B
-    # This reflects how humans perceive brightness.
-    weights = torch.tensor([0.299, 0.587, 0.114], device=frames[0].device).view(1, 1, 1, 3)
-    frames = torch.sum(frames * weights, dim=-1, keepdim=True).permute(0, 3, 1, 2)
-
-    # Resize to 84 x 84
-    frames = F.interpolate(frames, size=(84, 84), mode='bilinear')
-    # remove previous channel dim and add batch dim
-    frames = frames.squeeze(1).unsqueeze(0)
-
-    # Scale values to [0, 1]
-    return frames / 255.
+from preprocess import PreprocessWrapper
 
 
 def qnet(num_actions):
@@ -62,8 +42,9 @@ def copy_weights(src, dst):
 def eps_greedy(eps, q0, s0, num_actions, device):
     if random.random() < eps:
         return random.randint(0, num_actions - 1)
-    actions_values = q0(s0.to(device))
-    return torch.argmax(actions_values)
+    with torch.no_grad():
+        actions_values = q0(s0.to(device))
+        return torch.argmax(actions_values)
 
 
 # eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
@@ -91,38 +72,41 @@ def sample_batch(buffer, batch_size, device):
 
 def dqn(env, q0, q1, params, sgd_step, device):
     num_actions = env.action_space.n
-    step = 0
     replay_buffer = deque(maxlen=params.buffer_size)
+    step = 0
+
     x, info = env.reset(seed=13)
     for episode in range(1, params.num_episodes + 1):
-        frames = [torch.tensor(x, device=device)]
         episode_end = False
-        for _ in range(params.frames_per_state):
+        payoff = 0
+
+        frames = [x]
+        for _ in range(params.frames_per_state - 1):
             a = env.action_space.sample()
             x, r, terminated, truncated, info = env.step(a)
             episode_end = terminated or truncated
             if episode_end: break
-            frames.append(torch.tensor(x, device=device))
+            frames.append(x)
+            payoff += r
         if episode_end: continue
-        s0 = preprocess(frames)
-        frame_buffer = deque([frames[-1]], maxlen=2)
+        s0 = torch.concat(frames, dim=1)
 
         for t in range(params.max_episode_time):
             t0 = time.time()
+
             eps = 1
             if len(replay_buffer) >= params.buffer_start_size:
                 eps = next_epsilon(step - params.buffer_start_size)
             mlflow.log_metric('eps', eps, step=step)
-            with torch.no_grad():
-                a = eps_greedy(eps, q0, s0, num_actions, device)
+            a = eps_greedy(eps, q0, s0, num_actions, device)
 
             x, r, terminated, truncated, info = env.step(a)
             episode_end = terminated or truncated
+            payoff += r
 
             t1 = time.time()
-            frame_buffer.append(torch.tensor(x, device=device))
-            s1 = torch.concat((s0[:, 1:, :, :], preprocess(frame_buffer)), dim=1)
             r = np.clip(r, -1, 1)
+            s1 = torch.concat((s0[:, 1:, :, :], x), dim=1)
             transition = (s0.cpu(), a, r, s1.cpu())
             replay_buffer.append(transition)
             s0 = s1
@@ -151,6 +135,7 @@ def dqn(env, q0, q1, params, sgd_step, device):
 
         x, info = env.reset()
 
+        mlflow.log_metric('payoff', payoff, step=step)
         if episode % params.model_log_freq == 0:
             mlflow.pytorch.log_model(q0, f'q0_episode_{episode}')
 
@@ -201,6 +186,7 @@ class Params:
     buffer_size = 60_000
     # buffer_start_size = 50_000
     buffer_start_size = 30_000
+    # buffer_start_size = 10
     # m in the paper
     frames_per_state = 4
     gamma = .99
@@ -209,23 +195,24 @@ class Params:
     log_freq = 500
     env_id = "ALE/Breakout-v5"
     model_log_freq = 500
+    skip_frames = 4
 
 
 def main():
     mlflow.set_experiment('dqn')
-    
+
     logging.basicConfig(
         format='%(asctime)s %(module)s %(levelname)s %(message)s',
         level=logging.INFO, handlers=[logging.StreamHandler()], force=True)
 
     params = Params()
-
-    gym.register_envs(ale_py)
-    env = gym.make(params.env_id, render_mode="rgb_array")
-    num_actions = env.action_space.n
-
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     logging.info('Device: %s', device)
+
+    gym.register_envs(ale_py)
+    env = gym.make(params.env_id, render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
+    env = PreprocessWrapper(env, params.skip_frames, device)
+    num_actions = env.action_space.n
 
     q0 = qnet(num_actions).to(device)
     q1 = qnet(num_actions).to(device)
