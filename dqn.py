@@ -49,8 +49,8 @@ def eps_greedy(eps, q0, s0, num_actions, device):
 
 
 # eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
-def next_epsilon(step):
-    return max(-9e-7 * step + 1., .1)
+def next_epsilon(step, eps0=1, eps1=.1, n=1_000_000):
+    return max((eps1 - eps0) * step / n + eps0, .1)
 
 
 def compress(x):
@@ -90,18 +90,9 @@ def dqn(env, q0, q1, params, sgd_step, device):
 
     x, info = env.reset(seed=13)
     for episode in range(1, params.num_episodes + 1):
-        episode_end = False
         payoff = 0
 
-        frames = [x]
-        for _ in range(params.frames_per_state - 1):
-            a = env.action_space.sample()
-            x, r, terminated, truncated, info = env.step(a)
-            episode_end = terminated or truncated
-            if episode_end: break
-            frames.append(x)
-            payoff += r
-        if episode_end: continue
+        frames = [x] * params.frames_per_state
         s0 = torch.concat(frames, dim=1)
 
         for t in range(params.max_episode_time):
@@ -119,11 +110,10 @@ def dqn(env, q0, q1, params, sgd_step, device):
 
             t1 = time.time()
             r = np.clip(r, -1, 1)
-            s1 = torch.concat((s0, x), dim=1)
-            s = compress(s1)
-            transition = (s, a, r)
+            s = torch.concat((s0, x), dim=1)
+            transition = (compress(s), a, r)
             replay_buffer.append(transition)
-            s0 = s1[:, 1:, :, :]
+            s0 = s[:, 1:, :, :]
 
             mlflow.log_metric('buffer', len(replay_buffer), step=step)
             if len(replay_buffer) < params.buffer_start_size:
@@ -150,6 +140,7 @@ def dqn(env, q0, q1, params, sgd_step, device):
         x, info = env.reset()
 
         mlflow.log_metric('payoff', payoff, step=step)
+        mlflow.log_metric('episode_length', t, step=step)
         if episode % params.model_log_freq == 0:
             mlflow.pytorch.log_model(q0, f'q0_episode_{episode}')
 
@@ -192,12 +183,12 @@ class Params:
     # M in the paper
     num_episodes = 100_000
     # T in the paper
-    max_episode_time = 100_000
+    max_episode_time = 10_000
     # C in the paper
     target_update_freq = 10_000
     # N in the paper
     # buffer_size = 1_000_000
-    buffer_size = 200_000
+    buffer_size = 1_000_000
     # buffer_start_size = 50_000
     buffer_start_size = 30_000
     # buffer_start_size = 10
@@ -213,6 +204,7 @@ class Params:
 
 
 def main():
+    mlflow.set_tracking_uri("file:///tmp/mlflow")
     mlflow.set_experiment('dqn')
 
     logging.basicConfig(
