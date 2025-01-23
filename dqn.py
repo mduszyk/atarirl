@@ -44,8 +44,10 @@ def eps_greedy(eps, q0, s0, num_actions, device):
     if random.random() < eps:
         return random.randint(0, num_actions - 1)
     with torch.no_grad():
-        actions_values = q0(s0.to(device))
-        return torch.argmax(actions_values)
+        q0.eval()
+        actions_values = q0(s0.to(device))[0]
+        q0.train()
+        return torch.argmax(actions_values).item()
 
 
 # eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
@@ -84,6 +86,9 @@ def sample_batch(buffer, batch_size, device):
 
 
 def dqn(env, q0, q1, params, sgd_step, device):
+    q0.train()
+    q1.eval()
+
     num_actions = env.action_space.n
     replay_buffer = deque(maxlen=params.buffer_size)
     step = 0
@@ -101,7 +106,6 @@ def dqn(env, q0, q1, params, sgd_step, device):
             eps = 1
             if len(replay_buffer) >= params.buffer_start_size:
                 eps = next_epsilon(step - params.buffer_start_size)
-            mlflow.log_metric('eps', eps, step=step)
             a = eps_greedy(eps, q0, s0, num_actions, device)
 
             x, r, terminated, truncated, info = env.step(a)
@@ -115,7 +119,6 @@ def dqn(env, q0, q1, params, sgd_step, device):
             replay_buffer.append(transition)
             s0 = s[:, 1:, :, :]
 
-            mlflow.log_metric('buffer', len(replay_buffer), step=step)
             if len(replay_buffer) < params.buffer_start_size:
                 if step % params.log_freq == 0:
                     logging.info('Episode: %d, t: %d, step: %d, eps: %f, buffer: %d',
@@ -128,19 +131,27 @@ def dqn(env, q0, q1, params, sgd_step, device):
                     logging.info('Episode: %d, t: %d, step: %d, eps: %f, loss: %e',
                                  episode, t, step, eps, l)
 
+            t2 = time.time()
+            sgd_over_env_time = (t2 - t1) / (t1 - t0)
+
+            metrics = {
+                'eps': eps,
+                'buffer': len(replay_buffer),
+                'action': a,
+                'sgd_over_env_time': sgd_over_env_time,
+            }
+            mlflow.log_metrics(metrics, step=step)
+
             step += 1
             if step % params.target_update_freq == 0:
                 copy_weights(q0, q1)
-
-            t2 = time.time()
-            mlflow.log_metric('sgd_over_envstep_time', (t2 - t1) / (t1 - t0), step=step)
 
             if episode_end: break
 
         x, info = env.reset()
 
-        mlflow.log_metric('payoff', payoff, step=step)
-        mlflow.log_metric('episode_length', t, step=step)
+        metrics = {'payoff': payoff, 'episode_length': t}
+        mlflow.log_metrics(metrics, step=step)
         if episode % params.model_log_freq == 0:
             mlflow.pytorch.log_model(q0, f'q0_episode_{episode}')
 
@@ -174,7 +185,9 @@ def double_dqn_target(q0, q1, batch, episode_end, params):
         return r_batch
     m = s0_batch.shape[0]
     with torch.no_grad():
+        q0.eval()
         a_max = torch.argmax(q0(s1_batch), dim=1)
+        q0.train()
         return r_batch + params.gamma * q1(s1_batch)[torch.arange(m), a_max]
 
 
@@ -230,7 +243,10 @@ def main():
         # TODO why asdict(params) does not work ?
         params_dict = dict(filter(lambda x: not x[0].startswith('__'), Params.__dict__.items()))
         mlflow.log_params(params_dict)
-        dqn(env, q0, q1, params, sgd_step, device)
+        try:
+            dqn(env, q0, q1, params, sgd_step, device)
+        finally:
+            env.close()
 
     mlflow.pytorch.log_model(q0, "q0")
 
