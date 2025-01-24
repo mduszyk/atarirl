@@ -182,11 +182,8 @@ class Params:
     # C in the paper
     target_update_freq = 10_000
     # N in the paper
-    # buffer_size = 1_000_000
     buffer_size = 1_000_000
-    # buffer_start_size = 50_000
     buffer_start_size = 30_000
-    # buffer_start_size = 10
     # m in the paper
     frames_per_state = 4
     gamma = .99
@@ -198,7 +195,6 @@ class Params:
 
 
 def main():
-    # mlflow.set_tracking_uri("file:///tmp/mlflow")
     mlflow.set_experiment('dqn')
 
     logging.basicConfig(

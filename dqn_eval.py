@@ -72,8 +72,6 @@ class VideoWriter:
 
 
 def main():
-    mlflow.set_tracking_uri("file:///tmp/mlflow")
-
     logging.basicConfig(
         format='%(asctime)s %(module)s %(levelname)s %(message)s',
         level=logging.INFO, handlers=[logging.StreamHandler()], force=True)
@@ -82,8 +80,8 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     logging.info('Device: %s', device)
 
-    # model_uri = 'runs:/35543818a44b42c8b44c331b1d48b919/q0_episode_5000'
-    model_uri = 'runs:/7675e5d22c5e4a1dba628059e8e9e1c0/q0_episode_4000'
+    # model_uri = 'runs:/7675e5d22c5e4a1dba628059e8e9e1c0/q0_episode_4000'
+    model_uri = 'runs:/71d0f037aa30452295db9f74c7f22b29/q0_episode_3500'
     logging.info('loading: %s', model_uri)
     q0 = mlflow.pytorch.load_model(model_uri, map_location=device)
     q0.eval()
@@ -94,9 +92,10 @@ def main():
 
     agent = partial(dqn_agent, q0=q0)
 
-    video_processed = VideoWriter('videos/dqn_eval_processed.mp4', size=(84, 84))
-    # video_processed = None
-    video = VideoWriter('videos/dqn_eval.mp4', size=(160, 210))
+    env_name = params.env_id.replace('/', '-')
+    model_name = model_uri.split('/')[-1]
+    video_processed = VideoWriter(f'videos/{env_name}-{model_name}.gray.mp4', size=(84, 84))
+    video = VideoWriter(f'videos/{env_name}-{model_name}.mp4', size=(160, 210))
     try:
         payoff = play(env, agent, params, video_processed, video)
         logging.info('payoff: %f', payoff)
