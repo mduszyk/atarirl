@@ -1,6 +1,5 @@
 import logging
 import random
-import time
 from collections import deque
 from dataclasses import dataclass, asdict
 from functools import partial
@@ -52,7 +51,7 @@ def eps_greedy(eps, q0, s0, num_actions, device):
 
 # eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
 def next_epsilon(step, eps0=1, eps1=.1, n=1_000_000):
-    return max((eps1 - eps0) * step / n + eps0, .1)
+    return min(1., max(.1, (eps1 - eps0) * step / n + eps0))
 
 
 def compress(x):
@@ -88,69 +87,52 @@ def sample_batch(buffer, batch_size, device):
 def dqn(env, q0, q1, params, sgd_step, device):
     q0.train()
     q1.eval()
-
+    step = 0
     num_actions = env.action_space.n
     replay_buffer = deque(maxlen=params.buffer_size)
-    step = 0
 
     x, info = env.reset(seed=13)
     for episode in range(1, params.num_episodes + 1):
+        s0 = torch.concat([x] * params.frames_per_state, dim=1)
         payoff = 0
+        avg_loss = 0
 
-        frames = [x] * params.frames_per_state
-        s0 = torch.concat(frames, dim=1)
-
-        for t in range(params.max_episode_time):
-            t0 = time.time()
-
-            eps = 1
-            if len(replay_buffer) >= params.buffer_start_size:
-                eps = next_epsilon(step - params.buffer_start_size)
+        for t in range(1, params.max_episode_time + 1):
+            eps = next_epsilon(step - params.buffer_start_size)
             a = eps_greedy(eps, q0, s0, num_actions, device)
 
             x, r, terminated, truncated, info = env.step(a)
             episode_end = terminated or truncated
             payoff += r
 
-            t1 = time.time()
-            r = np.clip(r, -1, 1)
             s = torch.concat((s0, x), dim=1)
-            transition = (compress(s), a, r)
-            replay_buffer.append(transition)
             s0 = s[:, 1:, :, :]
+            transition = (compress(s), a, np.clip(r, -1, 1))
+            replay_buffer.append(transition)
 
-            if len(replay_buffer) < params.buffer_start_size:
-                if step % params.log_freq == 0:
-                    logging.info('Episode: %d, t: %d, step: %d, eps: %f, buffer: %d',
-                                 episode, t, step, eps, len(replay_buffer))
-            else:
+            if len(replay_buffer) >= params.buffer_start_size:
                 batch = sample_batch(replay_buffer, params.batch_size, device)
-                l = sgd_step(q0, q1, batch, episode_end)
-                mlflow.log_metric("loss", l, step=step)
-                if step % params.log_freq == 0:
-                    logging.info('Episode: %d, t: %d, step: %d, eps: %f, loss: %e',
-                                 episode, t, step, eps, l)
-
-            t2 = time.time()
-            sgd_over_env_time = (t2 - t1) / (t1 - t0)
-
-            metrics = {
-                'eps': eps,
-                'buffer': len(replay_buffer),
-                'action': a,
-                'sgd_over_env_time': sgd_over_env_time,
-            }
-            mlflow.log_metrics(metrics, step=step)
+                avg_loss += sgd_step(q0, q1, batch, episode_end)
 
             step += 1
             if step % params.target_update_freq == 0:
                 copy_weights(q0, q1)
 
-            if episode_end: break
+            if episode_end:
+                break
 
         x, info = env.reset()
 
-        metrics = {'payoff': payoff, 'episode_length': t}
+        avg_loss /= t
+        logging.info('Episode: %d, length: %d, step: %d, eps: %.4f, buffer: %d, avg loss: %e',
+                     episode, t, step, eps, len(replay_buffer), avg_loss)
+        metrics = {
+            'eps': eps,
+            'buffer': len(replay_buffer),
+            'avg_loss': avg_loss,
+            'payoff': payoff,
+            'episode_length': t,
+        }
         mlflow.log_metrics(metrics, step=step)
         if episode % params.model_log_freq == 0:
             mlflow.pytorch.log_model(q0, f'q0_episode_{episode}')
@@ -210,19 +192,23 @@ class Params:
     gamma = .99
     lr = .00025
     batch_size = 32
-    log_freq = 500
     env_id = "ALE/Breakout-v5"
     model_log_freq = 500
     skip_frames = 4
 
 
 def main():
-    mlflow.set_tracking_uri("file:///tmp/mlflow")
+    # mlflow.set_tracking_uri("file:///tmp/mlflow")
     mlflow.set_experiment('dqn')
 
     logging.basicConfig(
         format='%(asctime)s %(module)s %(levelname)s %(message)s',
         level=logging.INFO, handlers=[logging.StreamHandler()], force=True)
+
+    random.seed(13)
+    np.random.seed(13)
+    torch.manual_seed(13)
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
     params = Params()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'

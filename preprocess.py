@@ -28,8 +28,6 @@ class PreprocessWrapper(gym.Wrapper):
         self.skip = skip
         self.device = device
         self.processed_only = processed_only
-        self.frame1 = None
-        self.frame2 = None
 
     @torch.no_grad()
     def reset(self, **kwargs):
@@ -44,16 +42,21 @@ class PreprocessWrapper(gym.Wrapper):
         total_reward = 0.
         terminated = False
         truncated = False
+        frame1 = None
+        frame2 = None
         for i in range(self.skip):
             x, reward, terminated, truncated, info = self.env.step(action)
-            if i == self.skip - 2:
-                self.frame1 = torch.tensor(x, device=self.device)
-            if i == self.skip - 1:
-                self.frame2 = torch.tensor(x, device=self.device)
+            frame1 = frame2
+            frame2 = torch.tensor(x, device=self.device)
             total_reward += float(reward)
             if terminated or truncated:
                 break
-        frame = torch.maximum(self.frame1, self.frame2)
+        if frame1 is None:
+            frame = frame2
+        elif frame2 is None:
+            frame = frame1
+        else:
+            frame = torch.maximum(frame1, frame2)
         frame = preprocess(frame)
         if self.processed_only:
             return frame, total_reward, terminated, truncated, info

@@ -1,7 +1,6 @@
 .ipynb_checkpoints/
 __pycache__/
 .idea/
-
 mlruns/
 mlflow/
 videos/
