@@ -2,7 +2,7 @@ from collections import deque
 
 import torch
 
-from dqn import qnet, copy_weights, sample_batch, compress
+from dqn_train import qnet, copy_weights, sample_batch, compress
 
 
 def test_qnet():

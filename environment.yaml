@@ -11,6 +11,9 @@ dependencies:
   - gymnasium=1.0.0=py312h9cebb41_1
   - matplotlib=3.9.3=py312h7900ff3_0
   - pytest
+  - blosc
+  - python-snappy
+  - python-lzo
   - pip:
       - ale-py==0.10.1
       - mlflow==2.19.0
