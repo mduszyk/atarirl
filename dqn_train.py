@@ -70,7 +70,7 @@ def sample_batch(buffer, params, device):
     s1_batch = []
     for i in np.random.randint(0, len(buffer), (params.batch_size,)):
         s, a, r = buffer[i]
-        s = decompress(s, (1, 5, 84, 84), device) if params.buffer_compression else s
+        s = decompress(s, (1, 5, 84, 84), device) if params.buffer_compression else s.to(device)
         s0 = s[:, :-1, :, :]
         s1 = s[:, 1:, :, :]
         s0_batch.append(s0)
@@ -107,7 +107,7 @@ def dqn(env, q0, q1, params, sgd_step, device):
 
             s = torch.concat((s0, x), dim=1)
             s0 = s[:, 1:, :, :]
-            s = compress(s) if params.buffer_compression else s
+            s = compress(s) if params.buffer_compression else s.cpu()
             transition = (s, a, np.clip(r, -1, 1))
             replay_buffer.append(transition)
 
