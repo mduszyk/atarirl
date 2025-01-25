@@ -13,7 +13,9 @@ from dqn import Params
 from preprocess import PreprocessWrapper
 
 
-def dqn_agent(state, q0):
+def dqn_agent(state, q0, num_actions, eps=.05):
+    if eps > 0 and random.random() < eps:
+        return random.randint(0, num_actions - 1)
     actions_values = q0(state)[0]
     return torch.argmax(actions_values).item()
 
@@ -89,8 +91,9 @@ def main():
     gym.register_envs(ale_py)
     env = gym.make(params.env_id, render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
     env = PreprocessWrapper(env, params.skip_frames, device, processed_only=False)
+    num_actions = env.action_space.n
 
-    agent = partial(dqn_agent, q0=q0)
+    agent = partial(dqn_agent, q0=q0, num_actions=num_actions, eps=0)
 
     env_name = params.env_id.replace('/', '-')
     model_name = model_uri.split('/')[-1]

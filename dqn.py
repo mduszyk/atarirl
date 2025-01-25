@@ -50,8 +50,8 @@ def eps_greedy(eps, q0, s0, num_actions, device):
 
 
 # eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
-def next_epsilon(step, eps0=1, eps1=.1, n=1_000_000):
-    return min(1., max(.1, (eps1 - eps0) * step / n + eps0))
+def next_epsilon(step, eps0=1, eps1=.1, decay_time=1_000_000):
+    return min(1., max(.1, (eps1 - eps0) * step / decay_time + eps0))
 
 
 def compress(x):
@@ -98,7 +98,7 @@ def dqn(env, q0, q1, params, sgd_step, device):
         avg_loss = 0
 
         for t in range(1, params.max_episode_time + 1):
-            eps = next_epsilon(step - params.buffer_start_size)
+            eps = next_epsilon(step - params.buffer_start_size, decay_time=params.eps_decay_time)
             a = eps_greedy(eps, q0, s0, num_actions, device)
 
             x, r, terminated, truncated, info = env.step(a)
@@ -143,7 +143,8 @@ def dqn_sgd_step(q0, q1, batch, episode_end, opt, params, target_fn):
     target = target_fn(q0, q1, batch, episode_end, params)
     opt.zero_grad()
     output = q0(s0_batch)[torch.arange(m), a_batch]
-    loss = torch.mean((target - output) ** 2)
+    error = torch.clip(target - output, -1, 1)
+    loss = torch.mean(error ** 2)
     loss.backward()
     opt.step()
     return loss.item()
@@ -181,7 +182,7 @@ class Params:
     # C in the paper
     target_update_freq = 10_000
     # N in the paper
-    buffer_size = 1_000_000
+    buffer_size = 300_000
     buffer_start_size = 50_000
     # m in the paper
     frames_per_state = 4
@@ -195,6 +196,8 @@ class Params:
     model_log_freq = 500
     skip_frames = 4
     sgd_update_freq = 4
+    # epsilon decay for epsilon greedy
+    eps_decay_time = 500_000
 
 
 def main():
@@ -207,7 +210,7 @@ def main():
     random.seed(13)
     np.random.seed(13)
     torch.manual_seed(13)
-    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.use_deterministic_algorithms(True)
 
     params = Params()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -215,17 +218,17 @@ def main():
 
     gym.register_envs(ale_py)
     env = gym.make(params.env_id, render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
-    env = PreprocessWrapper(env, params.skip_frames, 'cpu')
+    env = PreprocessWrapper(env, params.skip_frames, device)
     num_actions = env.action_space.n
 
     q0 = qnet(num_actions).to(device)
     q1 = qnet(num_actions).to(device)
     copy_weights(q0, q1)
 
-    # opt = torch.optim.RMSprop(q0.parameters(), lr=params.lr)
+    opt = torch.optim.RMSprop(q0.parameters(), lr=params.lr)
     # opt = torch.optim.RMSprop(q0.parameters(), lr=params.lr, eps=params.rms_prop_eps,
     #                           alpha=params.rms_prop_alpha, momentum=params.rms_prop_momentum)
-    opt = torch.optim.Adam(q0.parameters(), lr=params.lr)
+    # opt = torch.optim.Adam(q0.parameters(), lr=params.lr)
     sgd_step = partial(dqn_sgd_step, opt=opt, params=params, target_fn=double_dqn_target)
 
     with mlflow.start_run(run_name=params.env_id):
