@@ -81,7 +81,7 @@ def main():
     logging.info('Device: %s', device)
 
     # model_uri = 'runs:/7675e5d22c5e4a1dba628059e8e9e1c0/q0_episode_4000'
-    model_uri = 'runs:/71d0f037aa30452295db9f74c7f22b29/q0_episode_3500'
+    model_uri = 'runs:/71d0f037aa30452295db9f74c7f22b29/q0_episode_6000'
     logging.info('loading: %s', model_uri)
     q0 = mlflow.pytorch.load_model(model_uri, map_location=device)
     q0.eval()

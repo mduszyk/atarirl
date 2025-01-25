@@ -110,13 +110,12 @@ def dqn(env, q0, q1, params, sgd_step, device):
             transition = (compress(s), a, np.clip(r, -1, 1))
             replay_buffer.append(transition)
 
-            if len(replay_buffer) >= params.buffer_start_size:
+            step += 1
+            if len(replay_buffer) >= params.buffer_start_size and step % params.sgd_update_freq == 0:
                 batch = sample_batch(replay_buffer, params.batch_size, device)
                 avg_loss += sgd_step(q0, q1, batch, episode_end)
-
-            step += 1
-            if step % params.target_update_freq == 0:
-                copy_weights(q0, q1)
+                if step % params.target_update_freq == 0:
+                    copy_weights(q0, q1)
 
             if episode_end:
                 break
@@ -183,15 +182,19 @@ class Params:
     target_update_freq = 10_000
     # N in the paper
     buffer_size = 1_000_000
-    buffer_start_size = 30_000
+    buffer_start_size = 50_000
     # m in the paper
     frames_per_state = 4
     gamma = .99
     lr = .00025
+    # rms_prop_alpha = .95
+    # rms_prop_momentum = .95
+    # rms_prop_eps = .01
     batch_size = 32
     env_id = "ALE/Breakout-v5"
     model_log_freq = 500
     skip_frames = 4
+    sgd_update_freq = 4
 
 
 def main():
@@ -212,13 +215,17 @@ def main():
 
     gym.register_envs(ale_py)
     env = gym.make(params.env_id, render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
-    env = PreprocessWrapper(env, params.skip_frames, device)
+    env = PreprocessWrapper(env, params.skip_frames, 'cpu')
     num_actions = env.action_space.n
 
     q0 = qnet(num_actions).to(device)
     q1 = qnet(num_actions).to(device)
+    copy_weights(q0, q1)
 
-    opt = torch.optim.RMSprop(q0.parameters(), lr=params.lr)
+    # opt = torch.optim.RMSprop(q0.parameters(), lr=params.lr)
+    # opt = torch.optim.RMSprop(q0.parameters(), lr=params.lr, eps=params.rms_prop_eps,
+    #                           alpha=params.rms_prop_alpha, momentum=params.rms_prop_momentum)
+    opt = torch.optim.Adam(q0.parameters(), lr=params.lr)
     sgd_step = partial(dqn_sgd_step, opt=opt, params=params, target_fn=double_dqn_target)
 
     with mlflow.start_run(run_name=params.env_id):
