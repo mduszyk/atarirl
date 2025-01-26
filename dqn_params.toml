@@ -16,6 +16,7 @@ eps_decay_time = 1_000_000 # epsilon decay for epsilon greedy
 lr = 0.00025
 optimizer_class = 'torch.optim.RMSprop'
 optimizer_kwargs = { momentum = 0.95 }
+noop_max = 30
 
 [adam]
 lr = 1e-4

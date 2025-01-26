@@ -198,7 +198,7 @@ def main():
 
     gym.register_envs(ale_py)
     env = gym.make(params['gym_env_id'], render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
-    env = PreprocessWrapper(env, params['skip_frames'], device)
+    env = PreprocessWrapper(env, params['skip_frames'], device, noop_max=params['noop_max'])
     num_actions = env.action_space.n
 
     q0 = qnet(num_actions).to(device)

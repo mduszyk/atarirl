@@ -1,6 +1,6 @@
+import random
 import torch
 import torch.nn.functional as F
-
 import gymnasium as gym
 
 
@@ -23,15 +23,19 @@ def preprocess(frame):
 
 class PreprocessWrapper(gym.Wrapper):
 
-    def __init__(self, env, skip, device, processed_only=True):
+    def __init__(self, env, skip, device, processed_only=True, noop_max=0):
         super().__init__(env)
         self.skip = skip
         self.device = device
         self.processed_only = processed_only
+        self.noop_max = noop_max
 
     @torch.no_grad()
     def reset(self, **kwargs):
         x, info = self.env.reset(**kwargs)
+        # offset which frames the agent sees, since it only sees every 4 frames
+        for i in range(random.randint(0, self.noop_max - 1)):
+            self.env.step(0)
         frame = torch.tensor(x, device=self.device)
         if self.processed_only:
             return preprocess(frame), info
