@@ -1,7 +1,9 @@
+import importlib
+import json
 import logging
 import random
+import os
 from collections import deque
-from dataclasses import dataclass, asdict
 from functools import partial
 
 import blosc
@@ -15,6 +17,7 @@ import ale_py
 import mlflow
 
 from preprocess import PreprocessWrapper
+from utils import load_params
 
 
 def qnet(num_actions):
@@ -68,9 +71,9 @@ def sample_batch(buffer, params, device):
     a_batch = []
     r_batch = []
     s1_batch = []
-    for i in np.random.randint(0, len(buffer), (params.batch_size,)):
+    for i in np.random.randint(0, len(buffer), (params['batch_size'],)):
         s, a, r = buffer[i]
-        s = decompress(s, (1, 5, 84, 84), device) if params.buffer_compression else s.to(device)
+        s = decompress(s, (1, 5, 84, 84), device) if params['buffer_compression'] else s.to(device)
         s0 = s[:, :-1, :, :]
         s1 = s[:, 1:, :, :]
         s0_batch.append(s0)
@@ -89,16 +92,16 @@ def dqn(env, q0, q1, params, sgd_step, device):
     q1.eval()
     step = 0
     num_actions = env.action_space.n
-    replay_buffer = deque(maxlen=params.buffer_size)
+    replay_buffer = deque(maxlen=params['buffer_size'])
 
     x, info = env.reset(seed=13)
-    for episode in range(1, params.num_episodes + 1):
-        s0 = torch.concat([x] * params.frames_per_state, dim=1)
+    for episode in range(1, params['num_episodes'] + 1):
+        s0 = torch.concat([x] * params['frames_per_state'], dim=1)
         score = 0
         avg_loss = 0
 
-        for t in range(1, params.max_episode_time + 1):
-            eps = next_epsilon(step - params.buffer_start_size, decay_time=params.eps_decay_time)
+        for t in range(1, params['max_episode_time'] + 1):
+            eps = next_epsilon(step - params['buffer_start_size'], decay_time=params['eps_decay_time'])
             a = eps_greedy(eps, q0, s0, num_actions, device)
 
             x, r, terminated, truncated, info = env.step(a)
@@ -107,15 +110,15 @@ def dqn(env, q0, q1, params, sgd_step, device):
 
             s = torch.concat((s0, x), dim=1)
             s0 = s[:, 1:, :, :]
-            s = compress(s) if params.buffer_compression else s.cpu()
+            s = compress(s) if params['buffer_compression'] else s.cpu()
             transition = (s, a, np.clip(r, -1, 1))
             replay_buffer.append(transition)
 
             step += 1
-            if len(replay_buffer) >= params.buffer_start_size and step % params.sgd_update_freq == 0:
+            if len(replay_buffer) >= params['buffer_start_size'] and step % params['sgd_update_freq'] == 0:
                 batch = sample_batch(replay_buffer, params, device)
                 avg_loss += sgd_step(q0, q1, batch, episode_end)
-                if step % params.target_update_freq == 0:
+                if step % params['target_update_freq'] == 0:
                     copy_weights(q0, q1)
 
             if episode_end:
@@ -134,7 +137,7 @@ def dqn(env, q0, q1, params, sgd_step, device):
             'episode_length': t,
         }
         mlflow.log_metrics(metrics, step=step)
-        if episode % params.model_log_freq == 0:
+        if episode % params['model_log_freq'] == 0:
             mlflow.pytorch.log_model(q0, f'q0_episode_{episode}')
 
 
@@ -159,7 +162,7 @@ def dqn_target(q0, q1, batch, episode_end, params):
     with torch.no_grad():
         actions_values = q1(s1_batch)
         a_max = torch.argmax(actions_values, dim=1)
-        return r_batch + params.gamma * actions_values[torch.arange(m), a_max]
+        return r_batch + params['gamma'] * actions_values[torch.arange(m), a_max]
 
 
 def double_dqn_target(q0, q1, batch, episode_end, params):
@@ -171,36 +174,7 @@ def double_dqn_target(q0, q1, batch, episode_end, params):
         q0.eval()
         a_max = torch.argmax(q0(s1_batch), dim=1)
         q0.train()
-        return r_batch + params.gamma * q1(s1_batch)[torch.arange(m), a_max]
-
-
-@dataclass
-class Params:
-    # M in the paper
-    num_episodes = 100_000
-    # T in the paper
-    max_episode_time = 10_000
-    # C in the paper
-    target_update_freq = 10_000
-    # N in the paper
-    buffer_size = 1_000_000
-    buffer_start_size = 50_000
-    buffer_compression = True
-    # m in the paper
-    frames_per_state = 4
-    gamma = .99
-    # lr = .00025
-    lr = 1e-4
-    batch_size = 32
-    env_id = "ALE/Breakout-v5"
-    model_log_freq = 500
-    skip_frames = 4
-    sgd_update_freq = 4
-    # epsilon decay for epsilon greedy
-    eps_decay_time = 1_000_000
-    # rms_prop_alpha = .95
-    # rms_prop_momentum = .95
-    # rms_prop_eps = .01
+        return r_batch + params['gamma'] * q1(s1_batch)[torch.arange(m), a_max]
 
 
 def main():
@@ -210,35 +184,34 @@ def main():
         format='%(asctime)s %(module)s %(levelname)s %(message)s',
         level=logging.INFO, handlers=[logging.StreamHandler()], force=True)
 
+    params = load_params(os.environ.get('DQN_PARAMS_FILE', 'dqn_params.toml'),
+                         profile=os.environ.get('DQN_PARAMS_PROFILE'), env_var_prefix='DQN_')
+    logging.info('Params:\n%s', json.dumps(params, indent=4))
+
     random.seed(13)
     np.random.seed(13)
     torch.manual_seed(13)
     torch.use_deterministic_algorithms(True)
 
-    params = Params()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     logging.info('Device: %s', device)
 
     gym.register_envs(ale_py)
-    env = gym.make(params.env_id, render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
-    env = PreprocessWrapper(env, params.skip_frames, device)
+    env = gym.make(params['gym_env_id'], render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
+    env = PreprocessWrapper(env, params['skip_frames'], device)
     num_actions = env.action_space.n
 
     q0 = qnet(num_actions).to(device)
     q1 = qnet(num_actions).to(device)
     copy_weights(q0, q1)
 
-    # opt = torch.optim.RMSprop(q0.parameters(), lr=params.lr)
-    # opt = torch.optim.RMSprop(q0.parameters(), lr=params.lr, eps=params.rms_prop_eps,
-    #                           alpha=params.rms_prop_alpha, momentum=params.rms_prop_momentum)
-    # opt = torch.optim.Adam(q0.parameters(), lr=params.lr)
-    opt = torch.optim.Adam(q0.parameters(), lr=params.lr)
+    module = importlib.import_module('.'.join(params['optimizer_class'].split('.')[:-1]))
+    optimizer_class = getattr(module, params['optimizer_class'].split('.')[-1])
+    opt = optimizer_class(q0.parameters(), lr=params['lr'], **params['optimizer_kwargs'])
     sgd_step = partial(dqn_sgd_step, opt=opt, params=params, target_fn=double_dqn_target)
 
-    with mlflow.start_run(run_name=params.env_id):
-        # TODO why asdict(params) does not work ?
-        params_dict = dict(filter(lambda x: not x[0].startswith('__'), Params.__dict__.items()))
-        mlflow.log_params(params_dict)
+    with mlflow.start_run(run_name=params['gym_env_id']):
+        mlflow.log_params(params)
         try:
             dqn(env, q0, q1, params, sgd_step, device)
         finally:

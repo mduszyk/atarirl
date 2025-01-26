@@ -1,0 +1,29 @@
+[default]
+gym_env_id = "ALE/Breakout-v5"
+num_episodes = 100_000 # M in the paper
+max_episode_time = 10_000 # T in the paper
+target_update_freq = 10_000 # C in the paper
+buffer_size = 1_000_000 # N in the paper
+buffer_start_size = 50_000
+buffer_compression = true
+frames_per_state = 4 # m in the paper
+gamma = 0.99
+batch_size = 32
+model_log_freq = 500
+skip_frames = 4
+sgd_update_freq = 4
+eps_decay_time = 1_000_000 # epsilon decay for epsilon greedy
+lr = 0.00025
+optimizer_class = 'torch.optim.RMSprop'
+optimizer_kwargs = { momentum = 0.95 }
+
+[adam]
+lr = 1e-4
+optimizer_class = 'torch.optim.Adam'
+optimizer_kwargs = {}
+
+[runpod]
+batch_size = 64
+lr = 1e-4
+optimizer_class = 'torch.optim.Adam'
+optimizer_kwargs = {}
