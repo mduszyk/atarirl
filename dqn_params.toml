@@ -25,6 +25,8 @@ batch_size = 32
 optimizer_class = 'torch.optim.RMSprop'
 optimizer_kwargs = { momentum = 0.95 }
 
+random_seed = 13
+
 [adam]
 lr = 1e-4
 batch_size = 32

@@ -56,7 +56,7 @@ def eps_greedy(eps, q0, s0, num_actions, device):
 def next_epsilon(step, params):
     if step < 0:
         return 1
-    elif step > params.decay_time:
+    elif step > params.eps_decay_time:
         return .1
     else:
         return (params.eps_end - params.eps_start) * step / params.eps_decay_time + params.eps_start
@@ -104,7 +104,7 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
 
     num_actions = env.action_space.n
     replay_buffer = deque(maxlen=params.buffer_max_size)
-    x, info = env.reset(seed=13)
+    x, info = env.reset(seed=params.random_seed)
     for episode in range(1, params.num_episodes + 1):
         s0 = torch.concat([x] * params.frames_per_state, dim=1)
         score = 0
@@ -205,9 +205,9 @@ def main():
         profile=os.environ.get('DQN_PARAMS_PROFILE'), env_var_prefix='DQN_')
     logging.info('Params:\n%s', json.dumps(params, indent=4))
 
-    random.seed(13)
-    np.random.seed(13)
-    torch.manual_seed(13)
+    random.seed(params.random_seed)
+    np.random.seed(params.random_seed)
+    torch.manual_seed(params.random_seed)
     torch.use_deterministic_algorithms(True)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -219,7 +219,7 @@ def main():
     num_actions = env.action_space.n
 
     q0 = qnet(num_actions).to(device)
-    q1 = qnet(num_actions).to(device)
+    q1 = qnet(num_actions).to(device)  # target network
     copy_weights(q0, q1)
 
     module = importlib.import_module('.'.join(params.optimizer_class.split('.')[:-1]))
