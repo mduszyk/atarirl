@@ -4,11 +4,11 @@ import logging
 import random
 import os
 from collections import deque
-from functools import partial
 
 import blosc
 import numpy as np
 import torch
+from IPython.utils.path import target_update
 from torch import nn
 
 import gymnasium as gym
@@ -52,33 +52,37 @@ def eps_greedy(eps, q0, s0, num_actions, device):
         return torch.argmax(actions_values).item()
 
 
-# eps annealed linearly from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter
-def next_epsilon(step, eps0=1, eps1=.1, decay_time=1_000_000):
-    return min(1., max(.1, (eps1 - eps0) * step / decay_time + eps0))
+# eps annealed linearly from eps_start to eps_end
+# over the first decay_time frames, and fixed at eps_end thereafter
+def next_epsilon(step, eps_start, eps_end, decay_time):
+    if step < 0:
+        return 1
+    elif step > decay_time:
+        return .1
+    else:
+        return (eps_end - eps_start) * step / decay_time + eps_start
 
 
 def compress(x):
-    return blosc.compress(x.cpu().numpy().tobytes(), typesize=x.itemsize)
+    return blosc.compress(x.numpy().tobytes(), typesize=x.itemsize)
 
 
-def decompress(b, shape, device):
+def decompress(b, shape):
     b = blosc.decompress(b)
     x = np.frombuffer(b, dtype=np.float32).reshape(shape)
-    x = torch.tensor(x).to(device, non_blocking=True)
-    return x
+    return torch.tensor(x)
 
 
-def sample_batch(buffer, params, device):
+def sample_batch(buffer, batch_size, compression, device):
     s0_batch = []
     s1_batch = []
     a_batch = []
     r_batch = []
-    for i in np.random.randint(0, len(buffer), (params['batch_size'],)):
+    for i in np.random.randint(0, len(buffer), (batch_size,)):
         s, a, r = buffer[i]
-        if params['buffer_compression']:
-            s = decompress(s, (1, 5, 84, 84), device)
-        else:
-            s = s.to(device, non_blocking=True)
+        if compression:
+            s = decompress(s, (1, 5, 84, 84))
+        s = s.to(device, non_blocking=True)
         s0 = s[:, :-1, :, :]
         s1 = s[:, 1:, :, :]
         s0_batch.append(s0)
@@ -92,21 +96,26 @@ def sample_batch(buffer, params, device):
     return s0_batch, a_batch, r_batch, s1_batch
 
 
-def dqn(env, q0, q1, params, sgd_step, device):
+def dqn(env, q0, q1, params, opt, target_fn, device):
     q0.train()
     q1.eval()
     step = 0
-    num_actions = env.action_space.n
-    replay_buffer = deque(maxlen=params['buffer_size'])
+    sgd_step = 0
+    target_update_step = 0
 
+    num_actions = env.action_space.n
+    replay_buffer = deque(maxlen=params['buffer_max_size'])
     x, info = env.reset(seed=13)
     for episode in range(1, params['num_episodes'] + 1):
         s0 = torch.concat([x] * params['frames_per_state'], dim=1)
         score = 0
         avg_loss = 0
 
+        t = 0
+        eps = 1
         for t in range(1, params['max_episode_time'] + 1):
-            eps = next_epsilon(step - params['buffer_start_size'], decay_time=params['eps_decay_time'])
+            eps = next_epsilon(step - params['buffer_min_size'],
+                               params['eps_start'], params['eps_end'], params['eps_decay_time'])
             a = eps_greedy(eps, q0, s0, num_actions, device)
 
             x, r, terminated, truncated, info = env.step(a)
@@ -115,16 +124,20 @@ def dqn(env, q0, q1, params, sgd_step, device):
 
             s = torch.concat((s0, x), dim=1)
             s0 = s[:, 1:, :, :]
-            s = compress(s) if params['buffer_compression'] else s.cpu()
+            s = s.cpu()
+            if params['buffer_compression']:
+                s = compress(s)
             transition = (s, a, np.clip(r, -1, 1))
             replay_buffer.append(transition)
 
             step += 1
-            if len(replay_buffer) >= params['buffer_start_size'] and step % params['sgd_update_freq'] == 0:
-                batch = sample_batch(replay_buffer, params, device)
-                avg_loss += sgd_step(q0, q1, batch, episode_end)
-                if step % params['target_update_freq'] == 0:
+            if len(replay_buffer) >= params['buffer_min_size'] and step % params['sgd_update_freq'] == 0:
+                batch = sample_batch(replay_buffer, params['batch_size'], params['buffer_compression'], device)
+                avg_loss += dqn_sgd_step(q0, q1, batch, episode_end, opt, target_fn, params['gamma'])
+                sgd_step += 1
+                if sgd_step % params['target_update_freq'] == 0:
                     copy_weights(q0, q1)
+                    target_update_step += 1
 
             if episode_end:
                 break
@@ -132,8 +145,8 @@ def dqn(env, q0, q1, params, sgd_step, device):
         x, info = env.reset()
 
         avg_loss /= t
-        logging.info('Episode: %d, length: %d, score: %.2f, step: %d, eps: %.2f, buffer: %d, avg loss: %e',
-                     episode, t, score, step, eps, len(replay_buffer), avg_loss)
+        logging.info('Episode: %d, len: %d, step: %d, sgd: %d, target: %d, buf: %d, eps: %.2f, score: %.2f, loss: %e',
+                     episode, t, step, sgd_step, target_update_step, len(replay_buffer), eps, score, avg_loss)
         metrics = {
             'eps': eps,
             'buffer': len(replay_buffer),
@@ -146,10 +159,10 @@ def dqn(env, q0, q1, params, sgd_step, device):
             mlflow.pytorch.log_model(q0, f'q0_episode_{episode}')
 
 
-def dqn_sgd_step(q0, q1, batch, episode_end, opt, params, target_fn):
+def dqn_sgd_step(q0, q1, batch, episode_end, opt, target_fn, gamma):
     s0_batch, a_batch, r_batch, s1_batch = batch
     m = s0_batch.shape[0]
-    target = target_fn(q0, q1, batch, episode_end, params)
+    target = target_fn(q0, q1, batch, episode_end, gamma)
     opt.zero_grad()
     output = q0(s0_batch)[torch.arange(m), a_batch]
     error = torch.clip(target - output, -1, 1)
@@ -159,18 +172,7 @@ def dqn_sgd_step(q0, q1, batch, episode_end, opt, params, target_fn):
     return loss.item()
 
 
-def dqn_target(q0, q1, batch, episode_end, params):
-    s0_batch, a_batch, r_batch, s1_batch = batch
-    if episode_end:
-        return r_batch
-    m = s0_batch.shape[0]
-    with torch.no_grad():
-        actions_values = q1(s1_batch)
-        a_max = torch.argmax(actions_values, dim=1)
-        return r_batch + params['gamma'] * actions_values[torch.arange(m), a_max]
-
-
-def double_dqn_target(q0, q1, batch, episode_end, params):
+def double_dqn_target(q0, q1, batch, episode_end, gamma):
     s0_batch, a_batch, r_batch, s1_batch = batch
     if episode_end:
         return r_batch
@@ -179,7 +181,18 @@ def double_dqn_target(q0, q1, batch, episode_end, params):
         q0.eval()
         a_max = torch.argmax(q0(s1_batch), dim=1)
         q0.train()
-        return r_batch + params['gamma'] * q1(s1_batch)[torch.arange(m), a_max]
+        return r_batch + gamma * q1(s1_batch)[torch.arange(m), a_max]
+
+
+def dqn_target(q0, q1, batch, episode_end, gamma):
+    s0_batch, a_batch, r_batch, s1_batch = batch
+    if episode_end:
+        return r_batch
+    m = s0_batch.shape[0]
+    with torch.no_grad():
+        actions_values = q1(s1_batch)
+        a_max = torch.argmax(actions_values, dim=1)
+        return r_batch + gamma * actions_values[torch.arange(m), a_max]
 
 
 def main():
@@ -189,8 +202,9 @@ def main():
         format='%(asctime)s %(module)s %(levelname)s %(message)s',
         level=logging.INFO, handlers=[logging.StreamHandler()], force=True)
 
-    params = load_params(os.environ.get('DQN_PARAMS_FILE', 'dqn_params.toml'),
-                         profile=os.environ.get('DQN_PARAMS_PROFILE'), env_var_prefix='DQN_')
+    params = load_params(
+        os.environ.get('DQN_PARAMS_FILE', 'dqn_params.toml'),
+        profile=os.environ.get('DQN_PARAMS_PROFILE'), env_var_prefix='DQN_')
     logging.info('Params:\n%s', json.dumps(params, indent=4))
 
     random.seed(13)
@@ -213,11 +227,10 @@ def main():
     module = importlib.import_module('.'.join(params['optimizer_class'].split('.')[:-1]))
     optimizer_class = getattr(module, params['optimizer_class'].split('.')[-1])
     opt = optimizer_class(q0.parameters(), lr=params['lr'], **params['optimizer_kwargs'])
-    sgd_step = partial(dqn_sgd_step, opt=opt, params=params, target_fn=double_dqn_target)
 
     with mlflow.start_run(run_name=params['gym_env_id']):
         mlflow.log_params(params)
-        dqn(env, q0, q1, params, sgd_step, device)
+        dqn(env, q0, q1, params, opt, double_dqn_target, device)
         env.close()
 
     mlflow.pytorch.log_model(q0, "q0")
