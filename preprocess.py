@@ -34,8 +34,9 @@ class PreprocessWrapper(gym.Wrapper):
     def reset(self, **kwargs):
         x, info = self.env.reset(**kwargs)
         # offset which frames the agent sees, since it only sees every 4 frames
-        for i in range(random.randint(0, self.noop_max - 1)):
-            self.env.step(0)
+        if self.noop_max > 0:
+            for i in range(random.randint(0, self.noop_max - 1)):
+                x, reward, terminated, truncated, info = self.env.step(0)
         frame = torch.tensor(x, device=self.device)
         if self.processed_only:
             return preprocess(frame), info
@@ -56,13 +57,13 @@ class PreprocessWrapper(gym.Wrapper):
             if terminated or truncated:
                 break
         if frame1 is None:
-            frame = torch.tensor(frame2, device=self.device)
+            frame = torch.tensor(frame2).to(self.device, non_blocking=True)
         elif frame2 is None:
-            frame = torch.tensor(frame1, device=self.device)
+            frame = torch.tensor(frame1).to(self.device, non_blocking=True)
         else:
             frame = torch.maximum(
-                torch.tensor(frame1, device=self.device),
-                torch.tensor(frame2, device=self.device)
+                torch.tensor(frame1).pin_memory().to(self.device, non_blocking=True),
+                torch.tensor(frame2).pin_memory().to(self.device, non_blocking=True)
             )
         frame = preprocess(frame)
         if self.processed_only:

@@ -63,27 +63,32 @@ def compress(x):
 
 def decompress(b, shape, device):
     b = blosc.decompress(b)
-    return torch.tensor(np.frombuffer(b, dtype=np.float32).reshape(shape), device=device)
+    x = np.frombuffer(b, dtype=np.float32).reshape(shape)
+    x = torch.tensor(x).to(device, non_blocking=True)
+    return x
 
 
 def sample_batch(buffer, params, device):
     s0_batch = []
+    s1_batch = []
     a_batch = []
     r_batch = []
-    s1_batch = []
     for i in np.random.randint(0, len(buffer), (params['batch_size'],)):
         s, a, r = buffer[i]
-        s = decompress(s, (1, 5, 84, 84), device) if params['buffer_compression'] else s.to(device)
+        if params['buffer_compression']:
+            s = decompress(s, (1, 5, 84, 84), device)
+        else:
+            s = s.to(device, non_blocking=True)
         s0 = s[:, :-1, :, :]
         s1 = s[:, 1:, :, :]
         s0_batch.append(s0)
         a_batch.append(a)
         r_batch.append(r)
         s1_batch.append(s1)
-    s0_batch = torch.concat(s0_batch, dim=0).to(device)
-    a_batch = torch.tensor(a_batch, device=device)
-    r_batch = torch.tensor(r_batch, device=device)
-    s1_batch = torch.concat(s1_batch, dim=0).to(device)
+    s0_batch = torch.concat(s0_batch, dim=0)
+    s1_batch = torch.concat(s1_batch, dim=0)
+    a_batch = torch.tensor(a_batch).to(device, non_blocking=True)
+    r_batch = torch.tensor(r_batch).to(device, non_blocking=True)
     return s0_batch, a_batch, r_batch, s1_batch
 
 
@@ -127,7 +132,7 @@ def dqn(env, q0, q1, params, sgd_step, device):
         x, info = env.reset()
 
         avg_loss /= t
-        logging.info('Episode: %d, length: %d, score: %.2f, step: %d, eps: %.4f, buffer: %d, avg loss: %e',
+        logging.info('Episode: %d, length: %d, score: %.2f, step: %d, eps: %.2f, buffer: %d, avg loss: %e',
                      episode, t, score, step, eps, len(replay_buffer), avg_loss)
         metrics = {
             'eps': eps,
@@ -212,10 +217,8 @@ def main():
 
     with mlflow.start_run(run_name=params['gym_env_id']):
         mlflow.log_params(params)
-        try:
-            dqn(env, q0, q1, params, sgd_step, device)
-        finally:
-            env.close()
+        dqn(env, q0, q1, params, sgd_step, device)
+        env.close()
 
     mlflow.pytorch.log_model(q0, "q0")
 

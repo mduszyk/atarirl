@@ -19,12 +19,11 @@ optimizer_kwargs = { momentum = 0.95 }
 noop_max = 30
 
 [adam]
-lr = 1e-4
-optimizer_class = 'torch.optim.Adam'
-optimizer_kwargs = {}
-
-[runpod]
-batch_size = 64
+buffer_size = 1000_000
+buffer_start_size = 50_000
+buffer_compression = true
+eps_decay_time = 1000_000
+batch_size = 32
 lr = 1e-4
 optimizer_class = 'torch.optim.Adam'
 optimizer_kwargs = {}
