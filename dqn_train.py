@@ -53,13 +53,13 @@ def eps_greedy(eps, q0, s0, num_actions, device):
 
 # eps annealed linearly from eps_start to eps_end
 # over the first decay_time frames, and fixed at eps_end thereafter
-def next_epsilon(step, eps_start, eps_end, decay_time):
+def next_epsilon(step, params):
     if step < 0:
         return 1
-    elif step > decay_time:
+    elif step > params.decay_time:
         return .1
     else:
-        return (eps_end - eps_start) * step / decay_time + eps_start
+        return (params.eps_end - params.eps_start) * step / params.eps_decay_time + params.eps_start
 
 
 def compress(x):
@@ -72,14 +72,14 @@ def decompress(b, shape):
     return torch.tensor(x)
 
 
-def sample_batch(buffer, batch_size, compression, device):
+def sample_batch(buffer, params, device):
     s0_batch = []
     s1_batch = []
     a_batch = []
     r_batch = []
-    for i in np.random.randint(0, len(buffer), (batch_size,)):
+    for i in np.random.randint(0, len(buffer), (params.batch_size,)):
         s, a, r = buffer[i]
-        if compression:
+        if params.buffer_compression:
             s = decompress(s, (1, 5, 84, 84))
         s = s.to(device, non_blocking=True)
         s0 = s[:, :-1, :, :]
@@ -103,18 +103,17 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
     target_update_step = 0
 
     num_actions = env.action_space.n
-    replay_buffer = deque(maxlen=params['buffer_max_size'])
+    replay_buffer = deque(maxlen=params.buffer_max_size)
     x, info = env.reset(seed=13)
-    for episode in range(1, params['num_episodes'] + 1):
-        s0 = torch.concat([x] * params['frames_per_state'], dim=1)
+    for episode in range(1, params.num_episodes + 1):
+        s0 = torch.concat([x] * params.frames_per_state, dim=1)
         score = 0
         avg_loss = 0
 
         t = 0
         eps = 1
-        for t in range(1, params['max_episode_time'] + 1):
-            eps = next_epsilon(step - params['buffer_min_size'],
-                               params['eps_start'], params['eps_end'], params['eps_decay_time'])
+        for t in range(1, params.max_episode_time + 1):
+            eps = next_epsilon(step - params.buffer_min_size, params)
             a = eps_greedy(eps, q0, s0, num_actions, device)
 
             x, r, terminated, truncated, info = env.step(a)
@@ -124,17 +123,17 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
             s = torch.concat((s0, x), dim=1)
             s0 = s[:, 1:, :, :]
             s = s.cpu()
-            if params['buffer_compression']:
+            if params.buffer_compression:
                 s = compress(s)
             transition = (s, a, np.clip(r, -1, 1))
             replay_buffer.append(transition)
 
             step += 1
-            if len(replay_buffer) >= params['buffer_min_size'] and step % params['sgd_update_freq'] == 0:
-                batch = sample_batch(replay_buffer, params['batch_size'], params['buffer_compression'], device)
-                avg_loss += dqn_sgd_step(q0, q1, batch, episode_end, opt, target_fn, params['gamma'])
+            if len(replay_buffer) >= params.buffer_min_size and step % params.sgd_update_freq == 0:
+                batch = sample_batch(replay_buffer, params, device)
+                avg_loss += dqn_sgd_step(q0, q1, batch, episode_end, opt, target_fn, params.gamma)
                 sgd_step += 1
-                if sgd_step % params['target_update_freq'] == 0:
+                if sgd_step % params.target_update_freq == 0:
                     copy_weights(q0, q1)
                     target_update_step += 1
 
@@ -154,7 +153,7 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
             'episode_length': t,
         }
         mlflow.log_metrics(metrics, step=step)
-        if episode % params['model_log_freq'] == 0:
+        if episode % params.model_log_freq == 0:
             mlflow.pytorch.log_model(q0, f'q0_episode_{episode}')
 
 
@@ -215,19 +214,19 @@ def main():
     logging.info('Device: %s', device)
 
     gym.register_envs(ale_py)
-    env = gym.make(params['gym_env_id'], render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
-    env = PreprocessWrapper(env, params['skip_frames'], device, noop_max=params['noop_max'])
+    env = gym.make(params.gym_env_id, render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
+    env = PreprocessWrapper(env, params.skip_frames, device, noop_max=params.noop_max)
     num_actions = env.action_space.n
 
     q0 = qnet(num_actions).to(device)
     q1 = qnet(num_actions).to(device)
     copy_weights(q0, q1)
 
-    module = importlib.import_module('.'.join(params['optimizer_class'].split('.')[:-1]))
-    optimizer_class = getattr(module, params['optimizer_class'].split('.')[-1])
-    opt = optimizer_class(q0.parameters(), lr=params['lr'], **params['optimizer_kwargs'])
+    module = importlib.import_module('.'.join(params.optimizer_class.split('.')[:-1]))
+    optimizer_class = getattr(module, params.optimizer_class.split('.')[-1])
+    opt = optimizer_class(q0.parameters(), lr=params.lr, **params.optimizer_kwargs)
 
-    with mlflow.start_run(run_name=params['gym_env_id']):
+    with mlflow.start_run(run_name=params.gym_env_id):
         mlflow.log_params(params)
         dqn(env, q0, q1, params, opt, double_dqn_target, device)
         env.close()

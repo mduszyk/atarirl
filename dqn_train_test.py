@@ -3,6 +3,7 @@ from collections import deque
 import torch
 
 from dqn_train import qnet, copy_weights, sample_batch, compress
+from utils import AttrDict
 
 
 def test_qnet():
@@ -36,7 +37,8 @@ def test_sample_batch():
         r = torch.rand((1,)).item()
         t = (s, a, r)
         buf.append(t)
-    s0_batch, a_batch, r_batch, s1_batch = sample_batch(buf, 5, 'cpu')
+    params = AttrDict({'batch_size': 5, 'buffer_compression': True})
+    s0_batch, a_batch, r_batch, s1_batch = sample_batch(buf, params, 'cpu')
     assert s0_batch.shape == (5, 4, 84, 84)
     assert a_batch.shape == (5,)
     assert r_batch.shape == (5,)

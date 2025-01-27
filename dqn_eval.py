@@ -29,9 +29,9 @@ def play(env, agent, params, video_processed=None, video=None):
         video_processed.write(x)
     if video is not None:
         video.write(x2)
-    state = torch.concat([x] * params['frames_per_state'], dim=1)
+    state = torch.concat([x] * params.frames_per_state, dim=1)
     prev_state = state
-    for t in range(0, params['max_episode_time']):
+    for t in range(0, params.max_episode_time):
         # action = env.action_space.sample()
         if torch.all(prev_state == state):
             # fire action starts the breakout game
@@ -92,13 +92,13 @@ def main():
     q0.eval()
 
     gym.register_envs(ale_py)
-    env = gym.make(params['gym_env_id'], render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
-    env = PreprocessWrapper(env, params['skip_frames'], device, processed_only=False)
+    env = gym.make(params.gym_env_id, render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
+    env = PreprocessWrapper(env, params.skip_frames, device, processed_only=False)
     num_actions = env.action_space.n
 
     agent = partial(dqn_agent, q0=q0, num_actions=num_actions, eps=0)
 
-    env_name = params['gym_env_id'].replace('/', '-')
+    env_name = params.gym_env_id.replace('/', '-')
     model_name = model_uri.split('/')[-1]
     video_processed = VideoWriter(f'videos/{env_name}-{model_name}.gray.mp4', size=(84, 84))
     video = VideoWriter(f'videos/{env_name}-{model_name}.mp4', size=(160, 210))
