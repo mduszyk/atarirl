@@ -8,7 +8,6 @@ from collections import deque
 import blosc
 import numpy as np
 import torch
-from IPython.utils.path import target_update
 from torch import nn
 
 import gymnasium as gym
