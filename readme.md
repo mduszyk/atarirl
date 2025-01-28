@@ -11,7 +11,7 @@ mlflow ui
 
 ## Train using params profile
 ```adam
-DQN_PARAMS_PROFILE=adam python dqn_train.py
+DQN_PARAMS_PROFILE=dqn-adam python dqn_train.py
 ```
 
 ## Evaluate model stored in mlflow
