@@ -62,8 +62,8 @@ class PreprocessWrapper(gym.Wrapper):
             frame = torch.tensor(frame1).to(self.device, non_blocking=True)
         else:
             frame = torch.maximum(
-                torch.tensor(frame1).pin_memory().to(self.device, non_blocking=True),
-                torch.tensor(frame2).pin_memory().to(self.device, non_blocking=True)
+                torch.tensor(frame1).to(self.device, non_blocking=True),
+                torch.tensor(frame2).to(self.device, non_blocking=True)
             )
         frame = preprocess(frame)
         if self.processed_only:

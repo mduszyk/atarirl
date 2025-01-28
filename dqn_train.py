@@ -16,6 +16,7 @@ import ale_py
 import mlflow
 
 from preprocess import PreprocessWrapper
+from replay_buffer import ReplayBuffer
 from utils import load_params
 
 
@@ -78,15 +79,15 @@ def sample_batch(buffer, params, device):
     a_batch = []
     r_batch = []
     for i in np.random.randint(0, len(buffer), (params.batch_size,)):
-        s, a, r = buffer[i]
+        action, reward, state_transition = buffer[i]
         if params.buffer_compression:
-            s = decompress(s, (1, 5, 84, 84))
-        s = s.to(device, non_blocking=True)
-        s0 = s[:, :-1, :, :]
-        s1 = s[:, 1:, :, :]
+            state_transition = [decompress(frame, (1, 1, 84, 84)) for frame in state_transition]
+        state_transition = torch.concat(state_transition, dim=1).to(device, non_blocking=True)
+        s0 = state_transition[:, :-1, :, :]
+        s1 = state_transition[:, 1:, :, :]
         s0_batch.append(s0)
-        a_batch.append(a)
-        r_batch.append(r)
+        a_batch.append(action)
+        r_batch.append(reward)
         s1_batch.append(s1)
     s0_batch = torch.concat(s0_batch, dim=0)
     s1_batch = torch.concat(s1_batch, dim=0)
@@ -103,10 +104,11 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
     target_update_step = 0
 
     num_actions = env.action_space.n
-    replay_buffer = deque(maxlen=params.buffer_max_size)
-    x, info = env.reset(seed=params.random_seed)
+    frame, info = env.reset(seed=params.random_seed)
+    initial_frames = [frame] * params.frames_per_state
+    replay_buffer = ReplayBuffer(params.buffer_max_size, initial_frames, params.frames_per_state + 1)
     for episode in range(1, params.num_episodes + 1):
-        s0 = torch.concat([x] * params.frames_per_state, dim=1)
+        state = torch.concat(initial_frames, dim=1)
         score = 0
         avg_loss = 0
 
@@ -114,18 +116,17 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
         eps = 1
         for t in range(1, params.max_episode_time + 1):
             eps = next_epsilon(step - params.buffer_min_size, params)
-            a = eps_greedy(eps, q0, s0, num_actions, device)
+            action = eps_greedy(eps, q0, state, num_actions, device)
 
-            x, r, terminated, truncated, info = env.step(a)
+            frame, reward, terminated, truncated, info = env.step(action)
             episode_end = terminated or truncated
-            score += r
+            score += reward
 
-            s = torch.concat((s0, x), dim=1)
-            s0 = s[:, 1:, :, :]
-            s = s.cpu()
+            state = torch.concat((state, frame), dim=1)[:, 1:, :, :]
+            frame = frame.cpu()
             if params.buffer_compression:
-                s = compress(s)
-            transition = (s, a, np.clip(r, -1, 1))
+                frame = compress(frame)
+            transition = (action, np.clip(reward, -1, 1), frame)
             replay_buffer.append(transition)
 
             step += 1
@@ -140,7 +141,8 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
             if episode_end:
                 break
 
-        x, info = env.reset()
+        frame, info = env.reset()
+        initial_frames = [frame] * params.frames_per_state
 
         avg_loss /= t
         logging.info('Episode: %d, len: %d, step: %d, sgd: %d, target: %d, buf: %d, eps: %.2f, score: %.2f, loss: %e',
