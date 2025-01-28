@@ -127,10 +127,8 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
 
             state = torch.concat((state, frame), dim=1)[:, 1:, :, :]
             frame = frame.to('cpu', copy=False)
-            if params.buffer_compression:
-                frame = compress(frame)
-            transition = (action, np.clip(reward, -1, 1), frame)
-            replay_buffer.append(transition)
+            frame = compress(frame) if params.buffer_compression else frame
+            replay_buffer.append(action, np.clip(reward, -1, 1), frame)
 
             step += 1
             if len(replay_buffer) >= params.buffer_min_size and step % params.sgd_update_freq == 0:

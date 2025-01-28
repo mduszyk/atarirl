@@ -46,8 +46,7 @@ class ReplayBuffer:
         state_transition = self.state_transition_buf[i]
         return action, reward, state_transition
 
-    def append(self, transition):
-        action, reward, frame = transition
+    def append(self, action, reward, frame):
         self.buf.append((action, reward))
         self.state_transition_buf.append(frame)
 
