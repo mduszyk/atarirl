@@ -41,12 +41,12 @@ def copy_weights(src, dst):
     dst.load_state_dict(src.state_dict())
 
 
-def eps_greedy(eps, q0, s0, num_actions, device):
+def eps_greedy(eps, q0, state, num_actions):
     if random.random() < eps:
         return random.randint(0, num_actions - 1)
     with torch.no_grad():
         q0.eval()
-        actions_values = q0(s0.to(device))[0]
+        actions_values = q0(state)[0]
         q0.train()
         return torch.argmax(actions_values).item()
 
@@ -119,7 +119,7 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
 
         for t in range(1, params.max_episode_time + 1):
             eps = next_epsilon(step - params.buffer_min_size, params)
-            action = eps_greedy(eps, q0, state, num_actions, device)
+            action = eps_greedy(eps, q0, state, num_actions)
 
             frame, reward, terminated, truncated, info = env.step(action)
             episode_end = terminated or truncated
