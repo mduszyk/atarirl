@@ -19,7 +19,24 @@ from replay_buffer import ReplayBuffer
 from utils import load_params
 
 
-def qnet(num_actions):
+class SharedBiasLinear(nn.Module):
+
+    def __init__(self, in_features, out_features, shared_bias=True):
+        super().__init__()
+        self.single_bias = shared_bias
+        self.linear = nn.Linear(in_features, out_features, bias=not shared_bias)
+        self.bias = None
+        if shared_bias:
+            self.bias = nn.Parameter(.1 * torch.randn(1,))
+
+    def forward(self, x):
+        x = self.linear(x)
+        if self.bias is not None:
+            x = x + self.bias
+        return x
+
+
+def qnet(num_actions, shared_bias=False):
     # input: 4 x 84 x 84
     return nn.Sequential(
         nn.Conv2d(in_channels=4, out_channels=32, kernel_size=8, padding=0, stride=4),
@@ -31,7 +48,7 @@ def qnet(num_actions):
         nn.Flatten(),
         nn.Linear(in_features=3136, out_features=512),
         nn.ReLU(),
-        nn.Linear(in_features=512, out_features=num_actions),
+        SharedBiasLinear(in_features=512, out_features=num_actions, shared_bias=shared_bias),
     )
 
 
@@ -55,9 +72,9 @@ def eps_greedy(eps, q0, state, num_actions):
 # over the first decay_time frames, and fixed at eps_end thereafter
 def next_epsilon(step, params):
     if step < 0:
-        return 1
+        return params.eps_start
     elif step > params.eps_decay_time:
-        return .1
+        return params.eps_end
     else:
         return (params.eps_end - params.eps_start) * step / params.eps_decay_time + params.eps_start
 
@@ -223,8 +240,8 @@ def main():
     env = PreprocessWrapper(env, params.skip_frames, device, noop_max=params.noop_max)
     num_actions = env.action_space.n
 
-    q0 = qnet(num_actions).to(device)
-    q1 = qnet(num_actions).to(device)  # target network
+    q0 = qnet(num_actions, params.shared_bias).to(device)
+    q1 = qnet(num_actions, params.shared_bias).to(device)  # target network
     copy_weights(q0, q1)
 
     module = importlib.import_module('.'.join(params.optimizer_class.split('.')[:-1]))

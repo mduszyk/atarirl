@@ -26,7 +26,7 @@ optimizer_class = 'torch.optim.RMSprop'
 optimizer_kwargs = { momentum = 0.95 }
 
 target = 'dqn_target'
-single_bias = false  # single shared bias in the top layer of the network
+shared_bias = false  # shared bias in the last layer of the network
 random_seed = 13
 
 [dqn-adam]
@@ -45,4 +45,4 @@ optimizer_kwargs = {}
 target = 'double_dqn_target'
 target_update_freq = 30_000
 eps_end = 0.01
-single_bias = true
+shared_bias = true
