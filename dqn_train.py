@@ -148,7 +148,7 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
         metrics = {
             'eps': eps,
             'buffer': len(replay_buffer),
-            'avg_loss': avg_loss,
+            'loss': avg_loss,
             'score': score,
             'episode_length': t,
         }
@@ -226,9 +226,11 @@ def main():
     optimizer_class = getattr(module, params.optimizer_class.split('.')[-1])
     opt = optimizer_class(q0.parameters(), lr=params.lr, **params.optimizer_kwargs)
 
+    target_fn = globals()[params.target]
+
     with mlflow.start_run(run_name=params.gym_env_id):
         mlflow.log_params(params)
-        dqn(env, q0, q1, params, opt, double_dqn_target, device)
+        dqn(env, q0, q1, params, opt, target_fn, device)
         env.close()
 
     mlflow.pytorch.log_model(q0, "q0")
