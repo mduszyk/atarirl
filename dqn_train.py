@@ -3,7 +3,6 @@ import json
 import logging
 import random
 import os
-from collections import deque
 
 import blosc
 import numpy as np
@@ -100,6 +99,7 @@ def sample_batch(buffer, params, device):
 def dqn(env, q0, q1, params, opt, target_fn, device):
     q0.train()
     q1.eval()
+
     step = 0
     sgd_step = 0
     target_update_step = 0
@@ -108,14 +108,15 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
     frame, info = env.reset(seed=params.random_seed)
     frames = [frame] * params.frames_per_state
     initial_frames = list(map(compress, frames)) if params.buffer_compression else frames
-    replay_buffer = ReplayBuffer(params.buffer_max_size, initial_frames, params.frames_per_state + 1)
+    replay_buffer = ReplayBuffer(params.buffer_max_size, initial_frames, params.frames_per_state)
+
     for episode in range(1, params.num_episodes + 1):
         state = torch.concat(frames, dim=1)
         score = 0
         avg_loss = 0
-
-        t = 0
+        t = 1
         eps = 1
+
         for t in range(1, params.max_episode_time + 1):
             eps = next_epsilon(step - params.buffer_min_size, params)
             action = eps_greedy(eps, q0, state, num_actions, device)
