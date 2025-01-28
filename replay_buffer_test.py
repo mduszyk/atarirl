@@ -44,3 +44,15 @@ def test_multiple_episodes():
     assert buf[1] == [2, 3, 4]
     assert buf[2] == [3, 4, 5]
     assert buf[3] == [6, 7, 8]
+
+
+def test_empty_episodes():
+    buf = StateBuffer(max_len=10, initial_frames=[0, 1, 2], state_len=3)
+    for i in range(3, 6):
+        buf.append(i)
+    buf.new_episode([6, 7, 8])
+    buf.new_episode([9, 10, 11])
+    assert buf[2] == [2, 3, 4]
+    assert buf[3] == [3, 4, 5]
+    assert buf[4] == [6, 7, 8]
+    assert buf[5] == [9, 10, 11]
