@@ -64,6 +64,7 @@ def next_epsilon(step, params):
 
 
 def compress(x):
+    x = x.to('cpu', copy=False)
     return blosc.compress(x.numpy().tobytes(), typesize=x.itemsize)
 
 
@@ -105,10 +106,11 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
 
     num_actions = env.action_space.n
     frame, info = env.reset(seed=params.random_seed)
-    initial_frames = [frame] * params.frames_per_state
+    frames = [frame] * params.frames_per_state
+    initial_frames = list(map(compress, frames)) if params.buffer_compression else frames
     replay_buffer = ReplayBuffer(params.buffer_max_size, initial_frames, params.frames_per_state + 1)
     for episode in range(1, params.num_episodes + 1):
-        state = torch.concat(initial_frames, dim=1)
+        state = torch.concat(frames, dim=1)
         score = 0
         avg_loss = 0
 
@@ -123,7 +125,7 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
             score += reward
 
             state = torch.concat((state, frame), dim=1)[:, 1:, :, :]
-            frame = frame.cpu()
+            frame = frame.to('cpu', copy=False)
             if params.buffer_compression:
                 frame = compress(frame)
             transition = (action, np.clip(reward, -1, 1), frame)
@@ -142,7 +144,9 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
                 break
 
         frame, info = env.reset()
-        initial_frames = [frame] * params.frames_per_state
+        frames = [frame] * params.frames_per_state
+        initial_frames = list(map(compress, frames)) if params.buffer_compression else frames
+        replay_buffer.new_episode(initial_frames)
 
         avg_loss /= t
         logging.info('Episode: %d, len: %d, step: %d, sgd: %d, target: %d, buf: %d, eps: %.2f, score: %.2f, loss: %e',
