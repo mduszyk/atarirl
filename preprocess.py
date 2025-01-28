@@ -32,15 +32,15 @@ class PreprocessWrapper(gym.Wrapper):
 
     @torch.no_grad()
     def reset(self, **kwargs):
-        x, info = self.env.reset(**kwargs)
+        frame, info = self.env.reset(**kwargs)
         # offset which frames the agent sees, since it only sees every 4 frames
         if self.noop_max > 0:
             for i in range(random.randint(0, self.noop_max - 1)):
-                x, reward, terminated, truncated, info = self.env.step(0)
-        frame = torch.tensor(x, device=self.device)
+                frame, reward, terminated, truncated, info = self.env.step(0)
+        frame_processed = preprocess(torch.tensor(frame, device=self.device))
         if self.processed_only:
-            return preprocess(frame), info
-        return (preprocess(frame), x), info
+            return frame_processed, info
+        return (frame_processed, frame), info
 
     @torch.no_grad()
     def step(self, action):
@@ -49,23 +49,25 @@ class PreprocessWrapper(gym.Wrapper):
         truncated = False
         frame1 = None
         frame2 = None
+        info = None
+        frame = None
         for i in range(self.skip):
             frame1 = frame2
-            x, reward, terminated, truncated, info = self.env.step(action)
-            frame2 = x
+            frame, reward, terminated, truncated, info = self.env.step(action)
+            frame2 = frame
             total_reward += float(reward)
             if terminated or truncated:
                 break
         if frame1 is None:
-            frame = torch.tensor(frame2).to(self.device, non_blocking=True)
+            frame_processed = torch.tensor(frame2).to(self.device, non_blocking=True)
         elif frame2 is None:
-            frame = torch.tensor(frame1).to(self.device, non_blocking=True)
+            frame_processed = torch.tensor(frame1).to(self.device, non_blocking=True)
         else:
-            frame = torch.maximum(
+            frame_processed = torch.maximum(
                 torch.tensor(frame1).to(self.device, non_blocking=True),
                 torch.tensor(frame2).to(self.device, non_blocking=True)
             )
-        frame = preprocess(frame)
+        frame_processed = preprocess(frame_processed)
         if self.processed_only:
-            return frame, total_reward, terminated, truncated, info
-        return (frame, x), total_reward, terminated, truncated, info
+            return frame_processed, total_reward, terminated, truncated, info
+        return (frame_processed, frame), total_reward, terminated, truncated, info

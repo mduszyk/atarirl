@@ -3,7 +3,6 @@ import json
 import logging
 import random
 import os
-from collections import deque
 
 import blosc
 import numpy as np
@@ -16,6 +15,7 @@ import ale_py
 import mlflow
 
 from preprocess import PreprocessWrapper
+from replay_buffer import ReplayBuffer
 from utils import load_params
 
 
@@ -41,12 +41,12 @@ def copy_weights(src, dst):
     dst.load_state_dict(src.state_dict())
 
 
-def eps_greedy(eps, q0, s0, num_actions, device):
+def eps_greedy(eps, q0, state, num_actions):
     if random.random() < eps:
         return random.randint(0, num_actions - 1)
     with torch.no_grad():
         q0.eval()
-        actions_values = q0(s0.to(device))[0]
+        actions_values = q0(state)[0]
         q0.train()
         return torch.argmax(actions_values).item()
 
@@ -63,6 +63,7 @@ def next_epsilon(step, params):
 
 
 def compress(x):
+    x = x.to('cpu', copy=False)
     return blosc.compress(x.numpy().tobytes(), typesize=x.itemsize)
 
 
@@ -78,15 +79,15 @@ def sample_batch(buffer, params, device):
     a_batch = []
     r_batch = []
     for i in np.random.randint(0, len(buffer), (params.batch_size,)):
-        s, a, r = buffer[i]
+        action, reward, state_transition = buffer[i]
         if params.buffer_compression:
-            s = decompress(s, (1, 5, 84, 84))
-        s = s.to(device, non_blocking=True)
-        s0 = s[:, :-1, :, :]
-        s1 = s[:, 1:, :, :]
+            state_transition = [decompress(frame, (1, 1, 84, 84)) for frame in state_transition]
+        state_transition = torch.concat(state_transition, dim=1).to(device, non_blocking=True)
+        s0 = state_transition[:, :-1, :, :]
+        s1 = state_transition[:, 1:, :, :]
         s0_batch.append(s0)
-        a_batch.append(a)
-        r_batch.append(r)
+        a_batch.append(action)
+        r_batch.append(reward)
         s1_batch.append(s1)
     s0_batch = torch.concat(s0_batch, dim=0)
     s1_batch = torch.concat(s1_batch, dim=0)
@@ -98,35 +99,36 @@ def sample_batch(buffer, params, device):
 def dqn(env, q0, q1, params, opt, target_fn, device):
     q0.train()
     q1.eval()
+
     step = 0
     sgd_step = 0
     target_update_step = 0
 
     num_actions = env.action_space.n
-    replay_buffer = deque(maxlen=params.buffer_max_size)
-    x, info = env.reset(seed=params.random_seed)
+    frame, info = env.reset(seed=params.random_seed)
+    frames = [frame] * params.frames_per_state
+    initial_frames = list(map(compress, frames)) if params.buffer_compression else frames
+    replay_buffer = ReplayBuffer(params.buffer_max_size, initial_frames, params.frames_per_state)
+
     for episode in range(1, params.num_episodes + 1):
-        s0 = torch.concat([x] * params.frames_per_state, dim=1)
+        state = torch.concat(frames, dim=1)
         score = 0
         avg_loss = 0
-
-        t = 0
+        t = 1
         eps = 1
+
         for t in range(1, params.max_episode_time + 1):
             eps = next_epsilon(step - params.buffer_min_size, params)
-            a = eps_greedy(eps, q0, s0, num_actions, device)
+            action = eps_greedy(eps, q0, state, num_actions)
 
-            x, r, terminated, truncated, info = env.step(a)
+            frame, reward, terminated, truncated, info = env.step(action)
             episode_end = terminated or truncated
-            score += r
+            score += reward
 
-            s = torch.concat((s0, x), dim=1)
-            s0 = s[:, 1:, :, :]
-            s = s.cpu()
-            if params.buffer_compression:
-                s = compress(s)
-            transition = (s, a, np.clip(r, -1, 1))
-            replay_buffer.append(transition)
+            state = torch.concat((state, frame), dim=1)[:, 1:, :, :]
+            frame = frame.to('cpu', copy=False)
+            frame = compress(frame) if params.buffer_compression else frame
+            replay_buffer.append(action, np.clip(reward, -1, 1), frame)
 
             step += 1
             if len(replay_buffer) >= params.buffer_min_size and step % params.sgd_update_freq == 0:
@@ -140,7 +142,10 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
             if episode_end:
                 break
 
-        x, info = env.reset()
+        frame, info = env.reset()
+        frames = [frame] * params.frames_per_state
+        initial_frames = list(map(compress, frames)) if params.buffer_compression else frames
+        replay_buffer.new_episode(initial_frames)
 
         avg_loss /= t
         logging.info('Episode: %d, len: %d, step: %d, sgd: %d, target: %d, buf: %d, eps: %.2f, score: %.2f, loss: %e',

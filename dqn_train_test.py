@@ -3,6 +3,7 @@ from collections import deque
 import torch
 
 from dqn_train import qnet, copy_weights, sample_batch, compress
+from replay_buffer import ReplayBuffer
 from utils import AttrDict
 
 
@@ -29,14 +30,14 @@ def test_copy_weights():
 
 
 def test_sample_batch():
-    buf = deque()
+    initial_frames = [compress(torch.rand((1, 1, 84, 84)))] * 4
+    buf = ReplayBuffer(20, initial_frames, 4)
     for _ in range(15):
-        s = torch.rand((1, 5, 84, 84))
-        s = compress(s)
-        a = torch.randint(0, 4, (1,)).item()
-        r = torch.rand((1,)).item()
-        t = (s, a, r)
-        buf.append(t)
+        frame = torch.rand((1, 1, 84, 84))
+        frame = compress(frame)
+        action = torch.randint(0, 4, (1,)).item()
+        reward = torch.rand((1,)).item()
+        buf.append(action, reward, frame)
     params = AttrDict({'batch_size': 5, 'buffer_compression': True})
     s0_batch, a_batch, r_batch, s1_batch = sample_batch(buf, params, 'cpu')
     assert s0_batch.shape == (5, 4, 84, 84)
