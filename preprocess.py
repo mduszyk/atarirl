@@ -44,7 +44,7 @@ class PreprocessWrapper(gym.Wrapper):
 
     @torch.no_grad()
     def step(self, action):
-        total_reward = 0.
+        total_reward = 0
         terminated = False
         truncated = False
         frame1 = None

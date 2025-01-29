@@ -23,11 +23,8 @@ class SharedBiasLinear(nn.Module):
 
     def __init__(self, in_features, out_features, shared_bias=True):
         super().__init__()
-        self.single_bias = shared_bias
         self.linear = nn.Linear(in_features, out_features, bias=not shared_bias)
-        self.bias = None
-        if shared_bias:
-            self.bias = nn.Parameter(.1 * torch.randn(1,))
+        self.bias = nn.Parameter(.1 * torch.randn((1,))) if shared_bias else None
 
     def forward(self, x):
         x = self.linear(x)
@@ -80,8 +77,8 @@ def next_epsilon(step, params):
 
 
 def compress(x):
-    x = x.to('cpu', copy=False)
-    return blosc.compress(x.numpy().tobytes(), typesize=x.itemsize)
+    x = x.to('cpu', copy=False).numpy()
+    return blosc.compress(x.tobytes(), typesize=x.itemsize)
 
 
 def decompress(b, shape):
@@ -97,15 +94,13 @@ def sample_batch(buffer, params, device):
     r_batch = []
     for i in np.random.randint(0, len(buffer), (params.batch_size,)):
         action, reward, state_transition = buffer[i]
+        a_batch.append(action)
+        r_batch.append(reward)
         if params.buffer_compression:
             state_transition = [decompress(frame, (1, 1, 84, 84)) for frame in state_transition]
         state_transition = torch.concat(state_transition, dim=1).to(device, non_blocking=True)
-        s0 = state_transition[:, :-1, :, :]
-        s1 = state_transition[:, 1:, :, :]
-        s0_batch.append(s0)
-        a_batch.append(action)
-        r_batch.append(reward)
-        s1_batch.append(s1)
+        s0_batch.append(state_transition[:, :-1, :, :])
+        s1_batch.append(state_transition[:, 1:, :, :])
     s0_batch = torch.concat(s0_batch, dim=0)
     s1_batch = torch.concat(s1_batch, dim=0)
     a_batch = torch.tensor(a_batch).to(device, non_blocking=True)
@@ -143,8 +138,7 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
             score += reward
 
             state = torch.concat((state, frame), dim=1)[:, 1:, :, :]
-            frame = frame.to('cpu', copy=False)
-            frame = compress(frame) if params.buffer_compression else frame
+            frame = compress(frame) if params.buffer_compression else frame.to('cpu', copy=False)
             replay_buffer.append(action, np.clip(reward, -1, 1), frame)
 
             step += 1
@@ -174,7 +168,7 @@ def dqn(env, q0, q1, params, opt, target_fn, device):
             'score': score,
             'episode_length': t,
         }
-        mlflow.log_metrics(metrics, step=step)
+        mlflow.log_metrics(metrics, step)
         if episode % params.model_log_freq == 0:
             mlflow.pytorch.log_model(q0, f'q0_episode_{episode}')
 
@@ -244,8 +238,8 @@ def main():
     q1 = qnet(num_actions, params.shared_bias).to(device)  # target network
     copy_weights(q0, q1)
 
-    module = importlib.import_module('.'.join(params.optimizer_class.split('.')[:-1]))
-    optimizer_class = getattr(module, params.optimizer_class.split('.')[-1])
+    optimizer_module = importlib.import_module('.'.join(params.optimizer_class.split('.')[:-1]))
+    optimizer_class = getattr(optimizer_module, params.optimizer_class.split('.')[-1])
     opt = optimizer_class(q0.parameters(), lr=params.lr, **params.optimizer_kwargs)
 
     target_fn = globals()[params.target]
