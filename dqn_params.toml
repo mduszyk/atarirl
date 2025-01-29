@@ -32,7 +32,6 @@ random_seed = 13
 
 [dqn-adam]
 lr = 1e-4
-batch_size = 32
 optimizer_class = 'torch.optim.Adam'
 optimizer_kwargs = {}
 
@@ -44,16 +43,21 @@ target = 'double_dqn_target'
 [double-dqn-adam]
 target = 'double_dqn_target'
 lr = 1e-4
-batch_size = 32
 optimizer_class = 'torch.optim.Adam'
 optimizer_kwargs = {}
 
 
-[double-dqn-adam-tuned]
+[double-dqn-tuned]
+target = 'double_dqn_target'
+target_update_freq = 30_000
+eps_end = 0.01
+shared_bias = true
+
+
+[double-dqn-tuned-adam]
 target = 'double_dqn_target'
 target_update_freq = 30_000
 lr = 1e-4
-batch_size = 32
 optimizer_class = 'torch.optim.Adam'
 optimizer_kwargs = {}
 eps_end = 0.01
