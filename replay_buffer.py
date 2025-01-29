@@ -34,9 +34,9 @@ class StateBuffer:
 
 class ReplayBuffer:
 
-    def __init__(self, max_len, initial_frames, sate_len):
+    def __init__(self, max_len, initial_frames, state_len):
         self.buf = deque(maxlen=max_len)
-        self.state_transition_buf = StateBuffer(max_len + 1, initial_frames, sate_len + 1)
+        self.state_transition_buf = StateBuffer(max_len + 1, initial_frames, state_len + 1)
 
     def __len__(self):
         return len(self.buf)

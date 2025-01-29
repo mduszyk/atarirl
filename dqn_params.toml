@@ -14,7 +14,7 @@ noop_max = 30
 
 target_update_freq = 10_000 # C in the paper, measured in the number of sgd steps
 sgd_update_freq = 4
-model_log_freq = 500
+model_log_freq = 1000
 
 eps_decay_time = 1_000_000 # epsilon decay for epsilon greedy
 eps_start = 1
@@ -29,6 +29,7 @@ target = 'dqn_target'
 shared_bias = false  # shared bias in the last layer of the network
 random_seed = 13
 
+
 [dqn-adam]
 lr = 1e-4
 batch_size = 32
@@ -36,13 +37,24 @@ optimizer_class = 'torch.optim.Adam'
 optimizer_kwargs = {}
 
 
+[double-dqn]
+target = 'double_dqn_target'
+
+
 [double-dqn-adam]
+target = 'double_dqn_target'
 lr = 1e-4
 batch_size = 32
 optimizer_class = 'torch.optim.Adam'
 optimizer_kwargs = {}
 
+
+[double-dqn-adam-tuned]
 target = 'double_dqn_target'
 target_update_freq = 30_000
+lr = 1e-4
+batch_size = 32
+optimizer_class = 'torch.optim.Adam'
+optimizer_kwargs = {}
 eps_end = 0.01
 shared_bias = true
