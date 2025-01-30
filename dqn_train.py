@@ -97,8 +97,14 @@ def sample_batch(buffer, params, device):
         a_batch.append(action)
         r_batch.append(reward)
         if params.buffer_compression:
-            state_transition = [decompress(frame, (1, 1, 84, 84)) for frame in state_transition]
-        state_transition = torch.concat(state_transition, dim=1).to(device, non_blocking=True)
+            for j in range(len(state_transition)):
+                state_transition[j] = (
+                    decompress(state_transition[j], shape=(1, 1, 84, 84))
+                    .to(device, non_blocking=True)
+                )
+        else:
+            state_transition = state_transition.to(device, non_blocking=True)
+        state_transition = torch.concat(state_transition, dim=1)
         s0_batch.append(state_transition[:, :-1, :, :])
         s1_batch.append(state_transition[:, 1:, :, :])
     s0_batch = torch.concat(s0_batch, dim=0)
