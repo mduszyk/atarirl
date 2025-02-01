@@ -106,9 +106,10 @@ def main():
         score = play(env, agent, params, video_processed, video)
         logging.info('score: %f', score)
     finally:
-        env.close()
         video_processed.release()
         video.release()
+
+    env.close()
 
 
 if __name__ == '__main__':

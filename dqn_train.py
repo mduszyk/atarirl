@@ -263,9 +263,10 @@ def main():
     with mlflow.start_run(run_name=params.gym_env_id):
         mlflow.log_params(params)
         dqn(env, q0, q1, params, opt, target_fn, device)
-        env.close()
+        mlflow.pytorch.log_model(q0, "q0")
 
-    mlflow.pytorch.log_model(q0, "q0")
+    env.close()
+
 
 if __name__ == '__main__':
     main()
