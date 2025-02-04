@@ -3,10 +3,23 @@ import os
 import tomllib
 
 
-class AttrDict(dict):
+class FrozenAttrDict(dict):
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.__dict__ = self
+        object.__setattr__(self, '__dict__', self)
+
+    def __setattr__(self, key, value):
+        raise AttributeError('FrozenAttrDict is immutable')
+
+    def __delattr__(self, key):
+        raise AttributeError('FrozenAttrDict is immutable')
+
+    def __setitem__(self, key, value):
+        raise TypeError('FrozenAttrDict is immutable')
+
+    def __delitem__(self, key):
+        raise TypeError('FrozenAttrDict is immutable')
 
 
 def load_params(path, profile=None, env_var_prefix=None):
@@ -31,4 +44,4 @@ def load_params(path, profile=None, env_var_prefix=None):
                         env_value = type(value)(env_value)
                 params[key] = env_value
 
-    return AttrDict(params)
+    return FrozenAttrDict(params)
