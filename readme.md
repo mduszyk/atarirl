@@ -1,3 +1,5 @@
+# Atari RL
+Implementation of deep Q-network (Mnih et al., 2015) and Double DQN (Van Hasselt et al., 2016).
 
 ## Create conda environment
 ```shell
