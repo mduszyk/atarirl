@@ -11,7 +11,7 @@ import gymnasium as gym
 import torch
 
 from preprocess import PreprocessWrapper
-from utils import load_params
+from params import load_params
 
 
 def dqn_agent(state, q0, num_actions, eps=.05):
@@ -80,8 +80,7 @@ def main():
         format='%(asctime)s %(module)s %(levelname)s %(message)s',
         level=logging.INFO, handlers=[logging.StreamHandler()], force=True)
 
-    params = load_params(os.environ.get('DQN_PARAMS_FILE', 'dqn_params.toml'),
-                         profile=os.environ.get('DQN_PARAMS_PROFILE'), env_var_prefix='DQN_')
+    params = load_params('dqn_params.toml', env_prefix='DQN_', args_prefix='dqn_')
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     logging.info('Device: %s', device)
 

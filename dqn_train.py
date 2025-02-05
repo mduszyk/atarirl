@@ -16,7 +16,7 @@ import mlflow
 
 from preprocess import PreprocessWrapper
 from replay_buffer import ReplayBuffer
-from utils import load_params
+from params import load_params
 
 
 class SharedBiasLinear(nn.Module):
@@ -232,9 +232,7 @@ def main():
         format='%(asctime)s %(module)s %(levelname)s %(message)s',
         level=logging.INFO, handlers=[logging.StreamHandler()], force=True)
 
-    params = load_params(
-        os.environ.get('DQN_PARAMS_FILE', 'dqn_params.toml'),
-        profile=os.environ.get('DQN_PARAMS_PROFILE'), env_var_prefix='DQN_')
+    params = load_params('dqn_params.toml', env_prefix='DQN_', args_prefix='dqn_')
     logging.info('Params:\n%s', json.dumps(params, indent=4))
 
     random.seed(params.random_seed)

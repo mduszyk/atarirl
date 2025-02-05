@@ -4,7 +4,7 @@ import torch
 
 from dqn_train import qnet, copy_weights, sample_batch, compress
 from replay_buffer import ReplayBuffer
-from utils import AttrDict
+from params import AttrDict
 
 
 def test_qnet():
