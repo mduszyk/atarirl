@@ -22,34 +22,33 @@ def dqn_agent(state, q0, num_actions, eps=.05):
 
 
 @torch.no_grad()
-def play(env, agent, params, video_processed=None, video=None):
+def play(env, agent, params, video_preprocessed=None, video_orig=None):
     score = 0
-    (x, x2), info = env.reset()
-    if video_processed is not None:
-        video_processed.write(x)
-    if video is not None:
-        video.write(x2)
-    state = torch.concat([x] * params.frames_per_state, dim=1)
+    (frame, frame_orig), info = env.reset()
+    if video_preprocessed is not None:
+        video_preprocessed.write(frame)
+    if video_orig is not None:
+        video_orig.write(frame_orig)
+    state = torch.concat([frame] * params.frames_per_state, dim=1)
     prev_state = state
     for t in range(0, params.max_episode_time):
-        # action = env.action_space.sample()
         if torch.all(prev_state == state):
             # fire action starts the breakout game
             action = 1
         else:
             action = agent(state)
-        (x, x2), reward, terminated, truncated, info = env.step(action)
-        if video_processed is not None:
-            video_processed.write(x)
-        if video is not None:
-            video.write(x2)
+        (frame, frame_orig), reward, terminated, truncated, info = env.step(action)
+        if video_preprocessed is not None:
+            video_preprocessed.write(frame)
+        if video_orig is not None:
+            video_orig.write(frame_orig)
         score += reward
         if t % 100 == 0:
             logging.info('t: %d, score: %f, info: %s', t, score, info)
         if terminated or truncated:
             break
         prev_state = state
-        state = torch.concat((state[:, 1:, :, :], x), dim=1)
+        state = torch.concat((state[:, 1:, :, :], frame), dim=1)
     logging.info('t: %d, score: %f, info: %s', t, score, info)
     return score
 
@@ -96,11 +95,11 @@ def main():
     env = PreprocessWrapper(env, params.skip_frames, device, processed_only=False)
     num_actions = env.action_space.n
 
-    agent = partial(dqn_agent, q0=q0, num_actions=num_actions, eps=0)
+    agent = partial(dqn_agent, q0=q0, num_actions=num_actions, eps=params.eps_eval)
 
     env_name = params.gym_env_id.replace('/', '-')
     model_name = model_uri.split('/')[-1]
-    video_processed = VideoWriter(f'videos/{env_name}-{model_name}.gray.mp4', size=(84, 84))
+    video_processed = VideoWriter(f'videos/{env_name}-{model_name}.preprocessed.mp4', size=(84, 84))
     video = VideoWriter(f'videos/{env_name}-{model_name}.mp4', size=(160, 210))
     try:
         score = play(env, agent, params, video_processed, video)
