@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import random
@@ -10,8 +11,9 @@ import numpy as np
 import gymnasium as gym
 import torch
 
+import paramflow as pf
+
 from preprocess import PreprocessWrapper
-from params import load_params
 
 
 def dqn_agent(state, q0, num_actions, eps=.05):
@@ -80,13 +82,14 @@ def main():
         format='%(asctime)s %(module)s %(levelname)s %(message)s',
         level=logging.INFO, handlers=[logging.StreamHandler()], force=True)
 
-    params = load_params('dqn_params.toml', env_prefix='DQN_', args_prefix='dqn_')
+    params = pf.load(['dqn_train.toml', 'dqn_eval.toml'])
+    logging.info('Params:\n%s', json.dumps(params, indent=4))
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     logging.info('Device: %s', device)
 
-    model_uri = os.environ['DQN_MODEL_URI']
-    logging.info('loading: %s', model_uri)
-    q0 = mlflow.pytorch.load_model(model_uri, map_location=device)
+    logging.info('loading: %s', params.model_uri)
+    q0 = mlflow.pytorch.load_model(params.model_uri, map_location=device)
     q0.eval()
 
     gym.register_envs(ale_py)
@@ -97,9 +100,9 @@ def main():
     agent = partial(dqn_agent, q0=q0, num_actions=num_actions, eps=params.eps_eval)
 
     env_name = params.gym_env_id.replace('/', '-')
-    model_name = model_uri.split('/')[-1]
-    video_processed = VideoWriter(f'videos/{env_name}-{model_name}.preprocessed.mp4', size=(84, 84))
-    video = VideoWriter(f'videos/{env_name}-{model_name}.mp4', size=(160, 210))
+    model_name = params.model_uri.split('/')[-1]
+    video_processed = VideoWriter(f'{params.video_dir}/{env_name}-{model_name}.preprocessed.mp4', size=(84, 84))
+    video = VideoWriter(f'{params.video_dir}/{env_name}-{model_name}.mp4', size=(160, 210))
     try:
         score = play(env, agent, params, video_processed, video)
         logging.info('score: %f', score)

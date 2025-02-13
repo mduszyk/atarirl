@@ -13,15 +13,15 @@ mlflow ui
 ```
 
 ## Train using params profile
-```adam
+```shell
 # for pytorch deterministic algorithms
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
-DQN_PARAMS_PROFILE=dqn-adam python dqn_train.py
+python dqn_train.py --profile double-dqn-tuned-adam
 ```
 
 ## Evaluate model stored in mlflow
 ```shell
-DQN_MODEL_URI='runs:/f176f5800e1243b2bfd5cc2a7fd2470e/q0_episode_8000' python dqn_eval.py
+python dqn_eval.py --profile double-dqn-tuned-adam --model_uri 'runs:/8d3c31e65a3240eda1e0e92890057f46/q0_episode_22000'
 ```
 
 ## Alternatives that train faster
