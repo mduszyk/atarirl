@@ -1,7 +1,8 @@
 # Atari RL
-Implementation of RL agent for playing Atari games.
-- Deep Q-network (Mnih et al., 2015)
-- Double DQN (Van Hasselt et al., 2016)
+This project implements reinforcement learning agents based on Deep Q-Networks (DQN)
+and Double DQN for playing Atari 2600 games using the OpenAI Gym environment.
+It includes key features such as experience replay, target networks,
+ε-greedy exploration, and support for multiple Atari titles.
 
 ## Create conda environment
 ```shell
